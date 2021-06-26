@@ -1,0 +1,2 @@
+# SteganoLib
+Steganography library
