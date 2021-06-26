@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace libSteganography.Crypto
+namespace SteganoLib.Crypto
 {
     public sealed class PRNG
     {

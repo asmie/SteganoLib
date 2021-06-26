@@ -6,7 +6,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats;
 using SixLabors.ImageSharp.PixelFormats;
 
-namespace libSteganography.Algorithms
+namespace SteganoLib.Algorithms
 {
     public class LSB : IStegAlgorithm
     {

@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.31229.75
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteganoLib", "SteganoLib\SteganoLib.csproj", "{349A53DE-B511-40C5-B1ED-B9E1C4657EF8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteganoLib.Test", "SteganoLib.Test\SteganoLib.Test.csproj", "{0202AB27-93B3-4CA6-A217-1D4C6C956CE9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{349A53DE-B511-40C5-B1ED-B9E1C4657EF8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{349A53DE-B511-40C5-B1ED-B9E1C4657EF8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{349A53DE-B511-40C5-B1ED-B9E1C4657EF8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0202AB27-93B3-4CA6-A217-1D4C6C956CE9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0202AB27-93B3-4CA6-A217-1D4C6C956CE9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0202AB27-93B3-4CA6-A217-1D4C6C956CE9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0202AB27-93B3-4CA6-A217-1D4C6C956CE9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

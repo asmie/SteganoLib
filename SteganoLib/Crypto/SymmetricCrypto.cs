@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.IO;
 
-namespace libSteganography.Crypto
+namespace SteganoLib.Crypto
 {
     /// <summary>
     /// Main class for symmetric cryptography. Class is responsible for handling static information about available algorithms as well as
