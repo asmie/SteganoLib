@@ -10,10 +10,10 @@ namespace SteganoLib.Algorithms
 {
     public interface IStegAlgorithm
     {
-        public Image<Rgba32> EmbedBytes(byte[] data, Image<Rgba32> image);
+        public bool EmbedBytes(byte[] data, ref Image<Rgba32> image);
 
         public byte[] ExtractBytes(Image<Rgba32> image);
 
-        public bool IsPossibleToEmbed(byte[] data, Image<Rgba32> image);
+        public bool IsPossibleToEmbed(int dataLength, Image<Rgba32> image);
     }
 }
