@@ -57,7 +57,7 @@ namespace SteganoLib.Crypto
             using (var myAlgo = CreateInstance(Algorithm))
             {
                 if (KeyType == KeyTypes.RFC2898Derived)
-                    myAlgo.Key = (new Rfc2898DeriveBytes(Key, Salt, 4)).GetBytes(myAlgo.KeySize);
+                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize);
                 else
                     myAlgo.Key = Key;
 
@@ -107,7 +107,7 @@ namespace SteganoLib.Crypto
             using (var myAlgo = CreateInstance(Algorithm))
             {
                 if (KeyType == KeyTypes.RFC2898Derived)
-                    myAlgo.Key = (new Rfc2898DeriveBytes(Key, Salt, 4)).GetBytes(myAlgo.KeySize);
+                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize);
                 else
                     myAlgo.Key = Key;
 
@@ -199,7 +199,11 @@ namespace SteganoLib.Crypto
             foreach (Tuple<string, Type> x in _registeredAlgorithms)
             {
                 if (x.Item1 == name)
+                {
+                    if (x.Item2 == typeof(Aes))
+                        return Aes.Create();
                     return (SymmetricAlgorithm)Activator.CreateInstance(x.Item2);
+                }
             }
 
             return null;
@@ -226,8 +230,7 @@ namespace SteganoLib.Crypto
         /// </summary>
         private static List<Tuple<string, Type>> _registeredAlgorithms = new List<Tuple<string, Type>>
                 (new[] {
-            new Tuple<string, Type>( "AES", typeof(AesCryptoServiceProvider)),
-            new Tuple<string, Type>( "Rijandel", typeof(RijndaelManaged)),
+            new Tuple<string, Type>( "AES", typeof(Aes)),
         });
 
     }
