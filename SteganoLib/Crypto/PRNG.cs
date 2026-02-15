@@ -9,7 +9,8 @@ namespace SteganoLib.Crypto
 
         public void Initialize(int seed)
         {
-            _random = CreateInstance(Name, seed);
+            _random = CreateInstance(Name, seed)
+                ?? throw new InvalidOperationException($"PRNG algorithm '{Name}' is not registered.");
         }
 
         /// <summary>
@@ -18,8 +19,9 @@ namespace SteganoLib.Crypto
         /// <returns>Random integer.</returns>
         public int Next()
         {
+            if (_random == null)
+                throw new InvalidOperationException("PRNG has not been initialized. Call Initialize() first.");
             return _random.Next();
-            
         }
 
         /// <summary>
@@ -29,8 +31,9 @@ namespace SteganoLib.Crypto
         /// <returns>Random integer.</returns>
         public int Next(int max)
         {
+            if (_random == null)
+                throw new InvalidOperationException("PRNG has not been initialized. Call Initialize() first.");
             return _random.Next(max);
-
         }
 
 
@@ -42,8 +45,9 @@ namespace SteganoLib.Crypto
         /// <returns>Random integer</returns>
         public int Next(int min, int max)
         {
+            if (_random == null)
+                throw new InvalidOperationException("PRNG has not been initialized. Call Initialize() first.");
             return _random.Next(min, max);
-
         }
 
 

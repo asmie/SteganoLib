@@ -26,7 +26,7 @@ Library demands:
 
 Simply build from the Visual Studio or use any other .NET compiler of your choice.
 
-SteganoLib is the .NET Standard 2.1 project.
+SteganoLib targets .NET 10.
 
 
 ## Bug reporting

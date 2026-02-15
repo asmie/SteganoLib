@@ -57,7 +57,7 @@ namespace SteganoLib.Crypto
             using (var myAlgo = CreateInstance(Algorithm))
             {
                 if (KeyType == KeyTypes.RFC2898Derived)
-                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize);
+                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize / 8);
                 else
                     myAlgo.Key = Key;
 
@@ -107,7 +107,7 @@ namespace SteganoLib.Crypto
             using (var myAlgo = CreateInstance(Algorithm))
             {
                 if (KeyType == KeyTypes.RFC2898Derived)
-                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize);
+                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize / 8);
                 else
                     myAlgo.Key = Key;
 
@@ -116,7 +116,7 @@ namespace SteganoLib.Crypto
                 myAlgo.Padding = Padding;
 
 
-                ICryptoTransform decryptor = myAlgo.CreateEncryptor(myAlgo.Key, myAlgo.IV);
+                ICryptoTransform decryptor = myAlgo.CreateDecryptor(myAlgo.Key, myAlgo.IV);
 
                 using var msDecrypt = new MemoryStream();
                 using (var csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Write))

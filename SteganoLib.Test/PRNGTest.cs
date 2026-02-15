@@ -1,5 +1,5 @@
+using System;
 using System.Collections.Generic;
-using System.Text;
 using Xunit;
 
 namespace SteganoLib.Test
@@ -53,6 +53,60 @@ namespace SteganoLib.Test
                 var rnd = rand.Next(max);
                 Assert.Equal(expected[i], rnd);
             }
+        }
+
+        [Fact]
+        public void Initialize_UnknownName_ThrowsInvalidOperation()
+        {
+            var rand = new Crypto.PRNG();
+            rand.Name = "DoesNotExist";
+
+            Assert.Throws<InvalidOperationException>(() => rand.Initialize(42));
+        }
+
+        [Fact]
+        public void Next_WithoutInitialize_ThrowsInvalidOperation()
+        {
+            var rand = new Crypto.PRNG();
+
+            Assert.Throws<InvalidOperationException>(() => rand.Next());
+        }
+
+        [Fact]
+        public void NextMax_WithoutInitialize_ThrowsInvalidOperation()
+        {
+            var rand = new Crypto.PRNG();
+
+            Assert.Throws<InvalidOperationException>(() => rand.Next(100));
+        }
+
+        [Fact]
+        public void NextMinMax_WithoutInitialize_ThrowsInvalidOperation()
+        {
+            var rand = new Crypto.PRNG();
+
+            Assert.Throws<InvalidOperationException>(() => rand.Next(10, 100));
+        }
+
+        [Fact]
+        public void RegisterPRNG_InvalidType_ReturnsFalse()
+        {
+            Assert.False(Crypto.PRNG.RegisterPRNG("Bad", typeof(string)));
+        }
+
+        [Fact]
+        public void RegisterPRNG_DuplicateName_BothUsable()
+        {
+            // Registering the same name twice is allowed; first match wins
+            Assert.True(Crypto.PRNG.RegisterPRNG("Random2", typeof(Random)));
+            Assert.True(Crypto.PRNG.RegisterPRNG("Random2", typeof(Random)));
+
+            var rand = new Crypto.PRNG();
+            rand.Name = "Random2";
+            rand.Initialize(1);
+
+            // Should not throw; the first registration is used
+            rand.Next();
         }
     }
 }

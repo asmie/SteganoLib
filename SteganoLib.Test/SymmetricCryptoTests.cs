@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using System.Text;
 using Xunit;
 
@@ -26,11 +27,139 @@ namespace SteganoLib.Test
             aes.Key = Encoding.UTF8.GetBytes(key);
             aes.KeyType = Crypto.SymmetricCrypto.KeyTypes.Plain;
             aes.Algorithm = "AES";
-            aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+            aes.Mode = CipherMode.CBC;
 
             var output = aes.EncryptMemory(input);
             Assert.Equal(output.Length, expected.Length);
             Assert.Equal<byte[]>(output, expected);
+        }
+
+        [Theory]
+        [MemberData(nameof(Aes128CorrectDataCBCPaddingPKCS))]
+        public void AES128DecryptMemory_RoundTrip(byte[] input, string key, byte[] encrypted)
+        {
+            var aes = new Crypto.SymmetricCrypto();
+            aes.Key = Encoding.UTF8.GetBytes(key);
+            aes.KeyType = Crypto.SymmetricCrypto.KeyTypes.Plain;
+            aes.Algorithm = "AES";
+            aes.Mode = CipherMode.CBC;
+
+            var decrypted = aes.DecryptMemory(encrypted);
+            Assert.Equal(input, decrypted);
+        }
+
+        [Fact]
+        public void AES128EncryptDecryptMemory_PlainKey_RoundTrip()
+        {
+            byte[] plaintext = Encoding.UTF8.GetBytes("Hello, SteganoLib!");
+
+            var aes = new Crypto.SymmetricCrypto();
+            aes.Key = Encoding.UTF8.GetBytes("1234567890123456");
+            aes.KeyType = Crypto.SymmetricCrypto.KeyTypes.Plain;
+            aes.Algorithm = "AES";
+            aes.Mode = CipherMode.CBC;
+
+            var encrypted = aes.EncryptMemory(plaintext);
+            var decrypted = aes.DecryptMemory(encrypted);
+
+            Assert.Equal(plaintext, decrypted);
+        }
+
+        [Fact]
+        public void AES128EncryptDecryptText_PlainKey_RoundTrip()
+        {
+            string text = "Round-trip text test";
+
+            var aes = new Crypto.SymmetricCrypto();
+            aes.Key = Encoding.UTF8.GetBytes("1234567890123456");
+            aes.KeyType = Crypto.SymmetricCrypto.KeyTypes.Plain;
+            aes.Algorithm = "AES";
+            aes.Mode = CipherMode.CBC;
+
+            var encrypted = aes.EncryptText(text);
+            var decrypted = aes.DecryptText(encrypted);
+
+            Assert.Equal(text, decrypted);
+        }
+
+        [Fact]
+        public void AES_RFC2898DerivedKey_EncryptDecryptMemory_RoundTrip()
+        {
+            byte[] plaintext = Encoding.UTF8.GetBytes("RFC2898 derived key test");
+            byte[] passphrase = Encoding.UTF8.GetBytes("my secret passphrase");
+            byte[] salt = new byte[] { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x01 };
+
+            var encryptor = new Crypto.SymmetricCrypto();
+            encryptor.Key = passphrase;
+            encryptor.Salt = salt;
+            encryptor.KeyType = Crypto.SymmetricCrypto.KeyTypes.RFC2898Derived;
+            encryptor.Algorithm = "AES";
+            encryptor.Mode = CipherMode.CBC;
+
+            var encrypted = encryptor.EncryptMemory(plaintext);
+            Assert.NotEqual(plaintext, encrypted);
+
+            var decryptor = new Crypto.SymmetricCrypto();
+            decryptor.Key = passphrase;
+            decryptor.Salt = salt;
+            decryptor.KeyType = Crypto.SymmetricCrypto.KeyTypes.RFC2898Derived;
+            decryptor.Algorithm = "AES";
+            decryptor.Mode = CipherMode.CBC;
+
+            var decrypted = decryptor.DecryptMemory(encrypted);
+            Assert.Equal(plaintext, decrypted);
+        }
+
+        [Fact]
+        public void AES_RFC2898DerivedKey_EncryptDecryptText_RoundTrip()
+        {
+            string text = "RFC2898 text round-trip";
+            byte[] passphrase = Encoding.UTF8.GetBytes("another passphrase");
+            byte[] salt = new byte[] { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00 };
+
+            var encryptor = new Crypto.SymmetricCrypto();
+            encryptor.Key = passphrase;
+            encryptor.Salt = salt;
+            encryptor.KeyType = Crypto.SymmetricCrypto.KeyTypes.RFC2898Derived;
+            encryptor.Algorithm = "AES";
+            encryptor.Mode = CipherMode.CBC;
+
+            var encrypted = encryptor.EncryptText(text);
+
+            var decryptor = new Crypto.SymmetricCrypto();
+            decryptor.Key = passphrase;
+            decryptor.Salt = salt;
+            decryptor.KeyType = Crypto.SymmetricCrypto.KeyTypes.RFC2898Derived;
+            decryptor.Algorithm = "AES";
+            decryptor.Mode = CipherMode.CBC;
+
+            var decrypted = decryptor.DecryptText(encrypted);
+            Assert.Equal(text, decrypted);
+        }
+
+        [Fact]
+        public void AES_RFC2898DerivedKey_WrongPassphrase_FailsDecrypt()
+        {
+            byte[] plaintext = Encoding.UTF8.GetBytes("secret data");
+            byte[] salt = new byte[] { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x01 };
+
+            var encryptor = new Crypto.SymmetricCrypto();
+            encryptor.Key = Encoding.UTF8.GetBytes("correct passphrase");
+            encryptor.Salt = salt;
+            encryptor.KeyType = Crypto.SymmetricCrypto.KeyTypes.RFC2898Derived;
+            encryptor.Algorithm = "AES";
+            encryptor.Mode = CipherMode.CBC;
+
+            var encrypted = encryptor.EncryptMemory(plaintext);
+
+            var decryptor = new Crypto.SymmetricCrypto();
+            decryptor.Key = Encoding.UTF8.GetBytes("wrong passphrase!!");
+            decryptor.Salt = salt;
+            decryptor.KeyType = Crypto.SymmetricCrypto.KeyTypes.RFC2898Derived;
+            decryptor.Algorithm = "AES";
+            decryptor.Mode = CipherMode.CBC;
+
+            Assert.ThrowsAny<CryptographicException>(() => decryptor.DecryptMemory(encrypted));
         }
     }
 }
