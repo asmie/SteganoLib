@@ -95,17 +95,20 @@ namespace SteganoLib.Test
         }
 
         [Fact]
-        public void RegisterPRNG_DuplicateName_BothUsable()
+        public void RegisterPRNG_DuplicateName_SecondReturnsFalse()
         {
-            // Registering the same name twice is allowed; first match wins
-            Assert.True(Crypto.PRNG.RegisterPRNG("Random2", typeof(Random)));
-            Assert.True(Crypto.PRNG.RegisterPRNG("Random2", typeof(Random)));
+            // Names are unique; the first registration wins and is preserved.
+            // Unique per-test name avoids collisions with other tests sharing the process-wide registry.
+            var uniqueName = "Random_Dup_" + Guid.NewGuid().ToString("N");
+
+            Assert.True(Crypto.PRNG.RegisterPRNG(uniqueName, typeof(Random)));
+            Assert.False(Crypto.PRNG.RegisterPRNG(uniqueName, typeof(Random)));
 
             var rand = new Crypto.PRNG();
-            rand.Name = "Random2";
+            rand.Name = uniqueName;
             rand.Initialize(1);
 
-            // Should not throw; the first registration is used
+            // The original registration still works.
             rand.Next();
         }
     }

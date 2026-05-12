@@ -19,7 +19,19 @@ jobs:
         dotnet-version: 10.0.x
     - name: Restore dependencies
       run: dotnet restore
+    - name: Verify formatting
+      run: dotnet format --verify-no-changes --no-restore
     - name: Build
-      run: dotnet build --no-restore
-    - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet build --no-restore --configuration Release
+    - name: Test (with coverage)
+      run: >
+        dotnet test --no-build --configuration Release --verbosity normal
+        --collect:"XPlat Code Coverage"
+        --results-directory ./TestResults
+    - name: Upload coverage artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage
+        path: ./TestResults/**/coverage.cobertura.xml
+        if-no-files-found: warn

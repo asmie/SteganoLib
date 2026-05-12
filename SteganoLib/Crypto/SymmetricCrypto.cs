@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
@@ -27,7 +28,7 @@ namespace SteganoLib.Crypto
         /// </summary>
         public SymmetricCrypto()
         {
-            
+
         }
 
         /// <summary>
@@ -57,7 +58,7 @@ namespace SteganoLib.Crypto
             using (var myAlgo = CreateInstance(Algorithm))
             {
                 if (KeyType == KeyTypes.RFC2898Derived)
-                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize / 8);
+                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, Iterations, HashAlgorithm, myAlgo.KeySize / 8);
                 else
                     myAlgo.Key = Key;
 
@@ -107,7 +108,7 @@ namespace SteganoLib.Crypto
             using (var myAlgo = CreateInstance(Algorithm))
             {
                 if (KeyType == KeyTypes.RFC2898Derived)
-                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, 4, HashAlgorithmName.SHA1, myAlgo.KeySize / 8);
+                    myAlgo.Key = Rfc2898DeriveBytes.Pbkdf2(Key, Salt, Iterations, HashAlgorithm, myAlgo.KeySize / 8);
                 else
                     myAlgo.Key = Key;
 
@@ -140,6 +141,25 @@ namespace SteganoLib.Crypto
         } = { 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 };
 
         /// <summary>
+        /// Iteration count for PBKDF2 key derivation (used when <see cref="KeyType"/> is
+        /// <see cref="KeyTypes.RFC2898Derived"/>). Defaults to 600,000 per current OWASP guidance.
+        /// Both encryptor and decryptor must use the same value.
+        /// </summary>
+        public int Iterations
+        {
+            get; set;
+        } = 600_000;
+
+        /// <summary>
+        /// Hash algorithm used inside PBKDF2 key derivation. Defaults to SHA-256.
+        /// Both encryptor and decryptor must use the same value.
+        /// </summary>
+        public HashAlgorithmName HashAlgorithm
+        {
+            get; set;
+        } = HashAlgorithmName.SHA256;
+
+        /// <summary>
         /// Key type.
         /// </summary>
         public KeyTypes KeyType
@@ -148,7 +168,9 @@ namespace SteganoLib.Crypto
         } = KeyTypes.RFC2898Derived;
 
         /// <summary>
-        /// Byte array with key.
+        /// Byte array with key. Write-only by design — the getter is private so that
+        /// callers holding a <see cref="SymmetricCrypto"/> reference cannot read back
+        /// key material that was set on it.
         /// </summary>
         public byte[] Key
         {
@@ -157,7 +179,7 @@ namespace SteganoLib.Crypto
         } = { 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 };
 
         /// <summary>
-        /// Byte array with IV used in chain modes.
+        /// Byte array with IV used in chain modes. Write-only by design — see <see cref="Key"/>.
         /// </summary>
         public byte[] IV
         {
@@ -196,42 +218,41 @@ namespace SteganoLib.Crypto
         /// <returns>Created instance of algorithm or null if name was not found in the registered algorithms.</returns>
         private static SymmetricAlgorithm CreateInstance(string name)
         {
-            foreach (Tuple<string, Type> x in _registeredAlgorithms)
+            if (_registeredAlgorithms.TryGetValue(name, out var type))
             {
-                if (x.Item1 == name)
-                {
-                    if (x.Item2 == typeof(Aes))
-                        return Aes.Create();
-                    return (SymmetricAlgorithm)Activator.CreateInstance(x.Item2);
-                }
+                if (type == typeof(Aes))
+                    return Aes.Create();
+                return (SymmetricAlgorithm)Activator.CreateInstance(type);
             }
 
             return null;
         }
 
         /// <summary>
-        /// Allows user to register its own algorithms.
-        /// Every registered algorithm must derive from SymmetricAlgorithm class.
+        /// Register a custom symmetric-algorithm implementation. The type must derive
+        /// from <see cref="SymmetricAlgorithm"/>. Names are unique: re-registering an
+        /// existing name returns <c>false</c> and leaves the existing registration
+        /// untouched (no silent shadowing).
         /// </summary>
         /// <param name="name">Name of the algorithm.</param>
         /// <param name="creator">Type to be used for algorithm creation.</param>
-        /// <returns>True if successful.</returns>
+        /// <returns><c>true</c> if registered; <c>false</c> if the type is not a <see cref="SymmetricAlgorithm"/> subclass, or if a registration with the same name already exists.</returns>
         public static bool RegisterAlgorithm(string name, Type creator)
         {
             if (!creator.IsSubclassOf(typeof(SymmetricAlgorithm)) && creator != typeof(SymmetricAlgorithm))
                 return false;
 
-            _registeredAlgorithms.Add(new Tuple<string, Type>(name, creator));
-            return true;
+            return _registeredAlgorithms.TryAdd(name, creator);
         }
 
         /// <summary>
-        /// List with currently registered algorithms.
+        /// Currently registered symmetric algorithms, keyed by name.
         /// </summary>
-        private static List<Tuple<string, Type>> _registeredAlgorithms = new List<Tuple<string, Type>>
-                (new[] {
-            new Tuple<string, Type>( "AES", typeof(Aes)),
-        });
+        private static readonly ConcurrentDictionary<string, Type> _registeredAlgorithms = new(
+            new[]
+            {
+                new KeyValuePair<string, Type>("AES", typeof(Aes)),
+            });
 
     }
 }

@@ -6,8 +6,8 @@ using Xunit;
 
 namespace SteganoLib.Test
 {
-	public class LSBTest
-	{
+    public class LSBTest
+    {
         private static Algorithms.LSB CreateLSB(int seed, bool modifyR = true, bool modifyG = true, bool modifyB = true, int maxBits = 1)
         {
             var rowPrng = new Crypto.PRNG();

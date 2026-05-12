@@ -7,9 +7,34 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace SteganoLib.Algorithms
 {
+    /// <summary>
+    /// LSB (Least Significant Bit) image steganography.
+    /// <para>
+    /// Bits are written into the least-significant bit of selected colour channels
+    /// (R/G/B). The alpha channel is intentionally never modified — modifying it
+    /// would alter transparency in a way that is easily detectable and would also
+    /// fail on opaque output formats.
+    /// </para>
+    /// <para>
+    /// Pixel order is driven by two <see cref="Crypto.PRNG"/> instances
+    /// (<see cref="RowSequenceGenerator"/> and <see cref="ColumnSequenceGenerator"/>).
+    /// Sender and receiver must seed and configure identical PRNGs to recover the
+    /// same pixel sequence. <see cref="EmbedBytes"/> prepends a 4-byte big-endian
+    /// length header so <see cref="ExtractBytes"/> recovers the exact payload size.
+    /// </para>
+    /// </summary>
     public class LSB : IStegAlgorithm
     {
-
+        /// <summary>
+        /// Embed <paramref name="data"/> into <paramref name="image"/> in-place.
+        /// </summary>
+        /// <param name="data">Payload to embed. A 4-byte big-endian length header is prepended automatically.</param>
+        /// <param name="image">Image to write into; modified in-place.</param>
+        /// <returns><c>true</c> on success; <c>false</c> if the image lacks capacity for the payload.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when <see cref="RowSequenceGenerator"/> or <see cref="ColumnSequenceGenerator"/>
+        /// has not been set, or when either PRNG has not been initialized.
+        /// </exception>
         public bool EmbedBytes(byte[] data, Image<Rgba32> image)
         {
             if (ColumnSequenceGenerator == null)
@@ -35,7 +60,7 @@ namespace SteganoLib.Algorithms
             var usedPixels = new HashSet<(int, int)>();
 
             for (var i = 0; i < bits.Length; i++)
-			{
+            {
                 if ((RUsed && GUsed && BUsed) || usedBits == ModifyMaxBitsInByte)
                 {
                     bool found = false;
@@ -45,10 +70,10 @@ namespace SteganoLib.Algorithms
                         y = RowSequenceGenerator.Next(image.Height);
 
                         if (!usedPixels.Contains((x, y)))
-						{
+                        {
                             usedPixels.Add((x, y));
                             found = true;
-						}
+                        }
                     }
 
                     if (RUsed && GUsed && BUsed)
@@ -69,12 +94,12 @@ namespace SteganoLib.Algorithms
                     RUsed = true;
                 }
                 else if (!GUsed)
-				{
+                {
                     pixel.G = (byte)(bits[i] ? (pixel.G | 1) : (pixel.G & 254));
                     GUsed = true;
                 }
                 else if (!BUsed)
-				{
+                {
                     pixel.B = (byte)(bits[i] ? (pixel.B | 1) : (pixel.B & 254));
                     BUsed = true;
                 }
@@ -87,7 +112,18 @@ namespace SteganoLib.Algorithms
             return true;
         }
 
-
+        /// <summary>
+        /// Extract a previously embedded payload from <paramref name="image"/>.
+        /// </summary>
+        /// <param name="image">Image to read from; not modified.</param>
+        /// <returns>
+        /// The recovered payload bytes, or an empty array if the decoded length
+        /// header is invalid (negative or larger than the image capacity).
+        /// </returns>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when <see cref="RowSequenceGenerator"/> or <see cref="ColumnSequenceGenerator"/>
+        /// has not been set, or when either PRNG has not been initialized.
+        /// </exception>
         public byte[] ExtractBytes(Image<Rgba32> image)
         {
             if (ColumnSequenceGenerator == null)
@@ -190,6 +226,11 @@ namespace SteganoLib.Algorithms
             return result;
         }
 
+        /// <summary>
+        /// Check whether a payload of <paramref name="dataLength"/> bytes (plus the 4-byte
+        /// header) fits in <paramref name="image"/> given the current channel and per-pixel
+        /// bit configuration. Returns <c>false</c> when no channels are enabled.
+        /// </summary>
         public bool IsPossibleToEmbed(int dataLength, Image<Rgba32> image)
         {
             int enabledChannels = (ModifyR ? 1 : 0) + (ModifyG ? 1 : 0) + (ModifyB ? 1 : 0);
@@ -208,18 +249,37 @@ namespace SteganoLib.Algorithms
             return totalPixelsNeeded <= image.Width * image.Height;
         }
 
+        /// <summary>Whether to modify the red channel. Default <c>true</c>.</summary>
         public bool ModifyR { get; set; } = true;
+
+        /// <summary>Whether to modify the green channel. Default <c>true</c>.</summary>
         public bool ModifyG { get; set; } = true;
+
+        /// <summary>Whether to modify the blue channel. Default <c>true</c>.</summary>
         public bool ModifyB { get; set; } = true;
 
+        /// <summary>
+        /// Maximum number of bits embedded into a single pixel before moving on to the
+        /// next PRNG-selected pixel. Default <c>1</c>. Values above the number of
+        /// enabled channels are effectively clamped to the channel count.
+        /// </summary>
         public int ModifyMaxBitsInByte { get; set; } = 1;
 
-
+        /// <summary>
+        /// PRNG used to draw row indices for pixel selection. Must be set and
+        /// initialized before calling <see cref="EmbedBytes"/> or <see cref="ExtractBytes"/>.
+        /// The receiver must seed an identical PRNG to recover the same pixel sequence.
+        /// </summary>
         public Crypto.PRNG RowSequenceGenerator
         {
             get; set;
         }
 
+        /// <summary>
+        /// PRNG used to draw column indices for pixel selection. Must be set and
+        /// initialized before calling <see cref="EmbedBytes"/> or <see cref="ExtractBytes"/>.
+        /// The receiver must seed an identical PRNG to recover the same pixel sequence.
+        /// </summary>
         public Crypto.PRNG ColumnSequenceGenerator
         {
             get; set;
