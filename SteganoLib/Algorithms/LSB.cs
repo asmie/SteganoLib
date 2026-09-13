@@ -4,43 +4,41 @@ using System.Collections.Generic;
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SteganoLib.Selection;
 
 namespace SteganoLib.Algorithms
 {
     /// <summary>
     /// LSB (Least Significant Bit) image steganography.
     /// <para>
-    /// Bits are written into the least-significant bit of selected colour channels
-    /// (R/G/B). The alpha channel is intentionally never modified — modifying it
-    /// would alter transparency in a way that is easily detectable and would also
-    /// fail on opaque output formats.
+    /// Bits go into the least significant bit of the enabled colour channels.
+    /// Alpha is never touched: changing it is easy to spot and breaks on opaque formats.
     /// </para>
     /// <para>
-    /// Pixel order is driven by two <see cref="Crypto.PRNG"/> instances
-    /// (<see cref="RowSequenceGenerator"/> and <see cref="ColumnSequenceGenerator"/>).
-    /// Sender and receiver must seed and configure identical PRNGs to recover the
-    /// same pixel sequence. <see cref="EmbedBytes"/> prepends a 4-byte big-endian
-    /// length header so <see cref="ExtractBytes"/> recovers the exact payload size.
+    /// Pixel order comes from an <see cref="IPixelSelector"/>; sender and receiver
+    /// must use an equivalent selector. A 4-byte big-endian length header is written
+    /// in front of the payload so extraction knows where to stop.
     /// </para>
     /// </summary>
-    public class LSB : IStegAlgorithm
+    public class LSB : IStegAlgorithm<Image<Rgba32>>
     {
+        private const int HeaderSize = 4;
+        private const int HeaderBits = HeaderSize * 8;
+
+        private readonly IPixelSelector _selector;
+        private int _modifyMaxBitsInByte = 1;
+
+        public LSB(IPixelSelector selector)
+        {
+            _selector = selector ?? throw new ArgumentNullException(nameof(selector));
+        }
+
         /// <summary>
-        /// Embed <paramref name="data"/> into <paramref name="image"/> in-place.
+        /// Embed <paramref name="data"/> into <paramref name="image"/> in place.
         /// </summary>
-        /// <param name="data">Payload to embed. A 4-byte big-endian length header is prepended automatically.</param>
-        /// <param name="image">Image to write into; modified in-place.</param>
-        /// <returns><c>true</c> on success; <c>false</c> if the image lacks capacity for the payload.</returns>
-        /// <exception cref="InvalidOperationException">
-        /// Thrown when <see cref="RowSequenceGenerator"/> or <see cref="ColumnSequenceGenerator"/>
-        /// has not been set, or when either PRNG has not been initialized.
-        /// </exception>
+        /// <returns><c>false</c> if the image lacks capacity for the payload.</returns>
         public bool EmbedBytes(byte[] data, Image<Rgba32> image)
         {
-            if (ColumnSequenceGenerator == null)
-                throw new InvalidOperationException("ColumnSequenceGenerator has not been set.");
-            if (RowSequenceGenerator == null)
-                throw new InvalidOperationException("RowSequenceGenerator has not been set.");
             if (data == null)
                 throw new ArgumentNullException(nameof(data));
             if (image == null)
@@ -49,67 +47,24 @@ namespace SteganoLib.Algorithms
             if (!IsPossibleToEmbed(data.Length, image))
                 return false;
 
-            // Prepend 4-byte big-endian length header
-            byte[] combined = new byte[HeaderSize + data.Length];
-            combined[0] = (byte)(data.Length >> 24);
-            combined[1] = (byte)(data.Length >> 16);
-            combined[2] = (byte)(data.Length >> 8);
-            combined[3] = (byte)(data.Length);
-            Array.Copy(data, 0, combined, HeaderSize, data.Length);
+            byte[] framed = new byte[HeaderSize + data.Length];
+            framed[0] = (byte)(data.Length >> 24);
+            framed[1] = (byte)(data.Length >> 16);
+            framed[2] = (byte)(data.Length >> 8);
+            framed[3] = (byte)data.Length;
+            Array.Copy(data, 0, framed, HeaderSize, data.Length);
 
-            BitArray bits = new BitArray(combined);
-            bool RUsed = true, GUsed = true, BUsed = true;
-            int x = 0, y = 0;
-            var usedBits = 0;
-            var usedPixels = new HashSet<(int, int)>();
+            var bits = new BitArray(framed);
+            using var slots = Slots(image.Width, image.Height).GetEnumerator();
 
-            for (var i = 0; i < bits.Length; i++)
+            for (int i = 0; i < bits.Length; i++)
             {
-                if ((RUsed && GUsed && BUsed) || usedBits == ModifyMaxBitsInByte)
-                {
-                    bool found = false;
-                    while (!found)
-                    {
-                        x = ColumnSequenceGenerator.Next(image.Width);
-                        y = RowSequenceGenerator.Next(image.Height);
+                if (!slots.MoveNext())
+                    return false;
 
-                        if (!usedPixels.Contains((x, y)))
-                        {
-                            usedPixels.Add((x, y));
-                            found = true;
-                        }
-                    }
-
-                    if (RUsed && GUsed && BUsed)
-                    {
-                        if (ModifyR) RUsed = false;
-                        if (ModifyG) GUsed = false;
-                        if (ModifyB) BUsed = false;
-                    }
-
-                    usedBits = 0;
-                }
-
+                var (x, y, channel) = slots.Current;
                 var pixel = image[x, y];
-
-                if (!RUsed)
-                {
-                    pixel.R = (byte)(bits[i] ? (pixel.R | 1) : (pixel.R & 254));
-                    RUsed = true;
-                }
-                else if (!GUsed)
-                {
-                    pixel.G = (byte)(bits[i] ? (pixel.G | 1) : (pixel.G & 254));
-                    GUsed = true;
-                }
-                else if (!BUsed)
-                {
-                    pixel.B = (byte)(bits[i] ? (pixel.B | 1) : (pixel.B & 254));
-                    BUsed = true;
-                }
-
-                usedBits++;
-
+                WriteBit(ref pixel, channel, bits[i]);
                 image[x, y] = pixel;
             }
 
@@ -119,149 +74,57 @@ namespace SteganoLib.Algorithms
         /// <summary>
         /// Extract a previously embedded payload from <paramref name="image"/>.
         /// </summary>
-        /// <param name="image">Image to read from; not modified.</param>
         /// <returns>
-        /// The recovered payload bytes, or an empty array if the decoded length
-        /// header is invalid (negative or larger than the image capacity).
+        /// The payload, or an empty array if the length header is not plausible for this image.
         /// </returns>
-        /// <exception cref="InvalidOperationException">
-        /// Thrown when <see cref="RowSequenceGenerator"/> or <see cref="ColumnSequenceGenerator"/>
-        /// has not been set, or when either PRNG has not been initialized.
-        /// </exception>
         public byte[] ExtractBytes(Image<Rgba32> image)
         {
-            if (ColumnSequenceGenerator == null)
-                throw new InvalidOperationException("ColumnSequenceGenerator has not been set.");
-            if (RowSequenceGenerator == null)
-                throw new InvalidOperationException("RowSequenceGenerator has not been set.");
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
-            bool RUsed = true, GUsed = true, BUsed = true;
-            int x = 0, y = 0;
-            var usedBits = 0;
-            var usedPixels = new HashSet<(int, int)>();
-            var extractedBits = new List<bool>();
-            int bitsNeeded = 32; // Start with 4-byte length header
+            using var slots = Slots(image.Width, image.Height).GetEnumerator();
 
-            int bitIndex = 0;
-            while (bitIndex < bitsNeeded)
-            {
-                if ((RUsed && GUsed && BUsed) || usedBits == ModifyMaxBitsInByte)
-                {
-                    bool found = false;
-                    while (!found)
-                    {
-                        x = ColumnSequenceGenerator.Next(image.Width);
-                        y = RowSequenceGenerator.Next(image.Height);
+            byte[] header = new byte[HeaderSize];
+            if (!ReadBytes(image, slots, header))
+                return Array.Empty<byte>();
 
-                        if (!usedPixels.Contains((x, y)))
-                        {
-                            usedPixels.Add((x, y));
-                            found = true;
-                        }
-                    }
+            int dataLength = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
+            if (dataLength < 0 || !IsPossibleToEmbed(dataLength, image))
+                return Array.Empty<byte>();
 
-                    if (RUsed && GUsed && BUsed)
-                    {
-                        if (ModifyR) RUsed = false;
-                        if (ModifyG) GUsed = false;
-                        if (ModifyB) BUsed = false;
-                    }
-
-                    usedBits = 0;
-                }
-
-                var pixel = image[x, y];
-
-                if (!RUsed)
-                {
-                    extractedBits.Add((pixel.R & 1) == 1);
-                    RUsed = true;
-                }
-                else if (!GUsed)
-                {
-                    extractedBits.Add((pixel.G & 1) == 1);
-                    GUsed = true;
-                }
-                else if (!BUsed)
-                {
-                    extractedBits.Add((pixel.B & 1) == 1);
-                    BUsed = true;
-                }
-
-                usedBits++;
-                bitIndex++;
-
-                // After extracting header bits, decode the length
-                if (bitIndex == 32)
-                {
-                    byte[] lengthBytes = new byte[4];
-                    for (int byteIdx = 0; byteIdx < 4; byteIdx++)
-                    {
-                        for (int bi = 0; bi < 8; bi++)
-                        {
-                            if (extractedBits[byteIdx * 8 + bi])
-                                lengthBytes[byteIdx] |= (byte)(1 << bi);
-                        }
-                    }
-
-                    int dataLength = (lengthBytes[0] << 24) | (lengthBytes[1] << 16)
-                                    | (lengthBytes[2] << 8) | lengthBytes[3];
-
-                    if (dataLength < 0 || !IsPossibleToEmbed(dataLength, image))
-                        return Array.Empty<byte>();
-
-                    // Capacity check above bounds this by the pixel count, so it fits an int.
-                    bitsNeeded = (int)TotalBits(dataLength);
-                }
-            }
-
-            // Reconstruct payload bytes from extracted bits (skip 32 header bits)
-            int payloadLength = (bitsNeeded - 32) / 8;
-            byte[] result = new byte[payloadLength];
-            for (int byteIdx = 0; byteIdx < payloadLength; byteIdx++)
-            {
-                int baseBit = (byteIdx + 4) * 8;
-                for (int bi = 0; bi < 8; bi++)
-                {
-                    if (extractedBits[baseBit + bi])
-                        result[byteIdx] |= (byte)(1 << bi);
-                }
-            }
+            byte[] result = new byte[dataLength];
+            if (!ReadBytes(image, slots, result))
+                return Array.Empty<byte>();
 
             return result;
         }
 
         /// <summary>
-        /// Check whether a payload of <paramref name="dataLength"/> bytes (plus the 4-byte
-        /// header) fits in <paramref name="image"/> given the current channel and per-pixel
-        /// bit configuration. Returns <c>false</c> when no channels are enabled.
+        /// Whether <paramref name="dataLength"/> bytes plus the header fit into
+        /// <paramref name="image"/> with the current channel and bits-per-pixel settings.
+        /// Returns <c>false</c> when no channel is enabled.
         /// </summary>
         public bool IsPossibleToEmbed(int dataLength, Image<Rgba32> image)
         {
-            int enabledChannels = (ModifyR ? 1 : 0) + (ModifyG ? 1 : 0) + (ModifyB ? 1 : 0);
-            if (enabledChannels == 0)
-                return false;
-
+            if (image == null)
+                throw new ArgumentNullException(nameof(image));
             if (dataLength < 0)
                 return false;
 
-            long totalBits = TotalBits(dataLength);
-            long pixelsPerCycle = (enabledChannels + _modifyMaxBitsInByte - 1) / _modifyMaxBitsInByte;
-            long fullCycles = totalBits / enabledChannels;
-            long remainingBits = totalBits % enabledChannels;
-            long pixelsForRemaining = remainingBits > 0
-                ? (remainingBits + _modifyMaxBitsInByte - 1) / _modifyMaxBitsInByte
-                : 0;
-            long totalPixelsNeeded = fullCycles * pixelsPerCycle + pixelsForRemaining;
+            int channels = EnabledChannelCount();
+            if (channels == 0)
+                return false;
 
-            return totalPixelsNeeded <= (long)image.Width * image.Height;
+            long totalBits = ((long)dataLength + HeaderSize) * 8;
+            long bitsPerPixel = Math.Min(_modifyMaxBitsInByte, channels);
+            long pixelsPerCycle = (channels + bitsPerPixel - 1) / bitsPerPixel;
+            long fullCycles = totalBits / channels;
+            long remainingBits = totalBits % channels;
+            long pixelsForRemaining = (remainingBits + bitsPerPixel - 1) / bitsPerPixel;
+            long pixelsNeeded = fullCycles * pixelsPerCycle + pixelsForRemaining;
+
+            return pixelsNeeded <= (long)image.Width * image.Height;
         }
-
-        private static long TotalBits(long dataLength) => (dataLength + HeaderSize) * 8;
-
-        private const int HeaderSize = 4;
 
         /// <summary>Whether to modify the red channel. Default <c>true</c>.</summary>
         public bool ModifyR { get; set; } = true;
@@ -273,9 +136,8 @@ namespace SteganoLib.Algorithms
         public bool ModifyB { get; set; } = true;
 
         /// <summary>
-        /// Maximum number of bits embedded into a single pixel before moving on to the
-        /// next PRNG-selected pixel. Default <c>1</c>. Values above the number of
-        /// enabled channels are effectively clamped to the channel count.
+        /// Maximum number of bits written into one pixel before moving to the next one.
+        /// Default <c>1</c>. Values above the number of enabled channels behave like the channel count.
         /// </summary>
         public int ModifyMaxBitsInByte
         {
@@ -288,27 +150,76 @@ namespace SteganoLib.Algorithms
             }
         }
 
-        private int _modifyMaxBitsInByte = 1;
+        /// <summary>Selector that decides the pixel order.</summary>
+        public IPixelSelector PixelSelector => _selector;
 
-        /// <summary>
-        /// PRNG used to draw row indices for pixel selection. Must be set and
-        /// initialized before calling <see cref="EmbedBytes"/> or <see cref="ExtractBytes"/>.
-        /// The receiver must seed an identical PRNG to recover the same pixel sequence.
-        /// </summary>
-        public Crypto.PRNG RowSequenceGenerator
+        private int EnabledChannelCount() => (ModifyR ? 1 : 0) + (ModifyG ? 1 : 0) + (ModifyB ? 1 : 0);
+
+        // One slot per bit: a pixel and the channel index (0 = R, 1 = G, 2 = B).
+        // Channels rotate across pixels so a cycle of C bits is spread over ceil(C / M) pixels.
+        private IEnumerable<(int X, int Y, int Channel)> Slots(int width, int height)
         {
-            get; set;
+            var channels = new List<int>(3);
+            if (ModifyR) channels.Add(0);
+            if (ModifyG) channels.Add(1);
+            if (ModifyB) channels.Add(2);
+            if (channels.Count == 0)
+                yield break;
+
+            int perPixel = Math.Min(_modifyMaxBitsInByte, channels.Count);
+            int next = 0;
+
+            foreach (var p in _selector.Pixels(width, height))
+            {
+                int written = 0;
+                while (next < channels.Count && written < perPixel)
+                {
+                    yield return (p.X, p.Y, channels[next]);
+                    next++;
+                    written++;
+                }
+
+                if (next == channels.Count)
+                    next = 0;
+            }
         }
 
-        /// <summary>
-        /// PRNG used to draw column indices for pixel selection. Must be set and
-        /// initialized before calling <see cref="EmbedBytes"/> or <see cref="ExtractBytes"/>.
-        /// The receiver must seed an identical PRNG to recover the same pixel sequence.
-        /// </summary>
-        public Crypto.PRNG ColumnSequenceGenerator
+        private static bool ReadBytes(Image<Rgba32> image, IEnumerator<(int X, int Y, int Channel)> slots, byte[] target)
         {
-            get; set;
+            for (int i = 0; i < target.Length * 8; i++)
+            {
+                if (!slots.MoveNext())
+                    return false;
+
+                var (x, y, channel) = slots.Current;
+                if (ReadBit(image[x, y], channel))
+                    target[i / 8] |= (byte)(1 << (i % 8));
+            }
+
+            return true;
         }
 
+        private static void WriteBit(ref Rgba32 pixel, int channel, bool bit)
+        {
+            switch (channel)
+            {
+                case 0: pixel.R = SetLsb(pixel.R, bit); break;
+                case 1: pixel.G = SetLsb(pixel.G, bit); break;
+                default: pixel.B = SetLsb(pixel.B, bit); break;
+            }
+        }
+
+        private static bool ReadBit(Rgba32 pixel, int channel)
+        {
+            byte value = channel switch
+            {
+                0 => pixel.R,
+                1 => pixel.G,
+                _ => pixel.B,
+            };
+            return (value & 1) == 1;
+        }
+
+        private static byte SetLsb(byte value, bool bit) => (byte)(bit ? (value | 1) : (value & 0xFE));
     }
 }

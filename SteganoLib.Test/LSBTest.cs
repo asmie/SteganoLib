@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SteganoLib.Selection;
 using Xunit;
 
 namespace SteganoLib.Test
@@ -10,18 +11,8 @@ namespace SteganoLib.Test
     {
         private static Algorithms.LSB CreateLSB(int seed, bool modifyR = true, bool modifyG = true, bool modifyB = true, int maxBits = 1)
         {
-            var rowPrng = new Crypto.PRNG();
-            rowPrng.Name = "Random";
-            rowPrng.Initialize(seed);
-
-            var colPrng = new Crypto.PRNG();
-            colPrng.Name = "Random";
-            colPrng.Initialize(seed + 1);
-
-            return new Algorithms.LSB
+            return new Algorithms.LSB(new PrngPixelSelector(rowSeed: seed, columnSeed: seed + 1))
             {
-                RowSequenceGenerator = rowPrng,
-                ColumnSequenceGenerator = colPrng,
                 ModifyR = modifyR,
                 ModifyG = modifyG,
                 ModifyB = modifyB,
@@ -177,59 +168,18 @@ namespace SteganoLib.Test
         }
 
         [Fact]
-        public void EmbedBytes_NullColumnGenerator_ThrowsInvalidOperation()
+        public void Constructor_NullSelector_ThrowsArgumentNull()
         {
-            var lsb = new Algorithms.LSB
-            {
-                RowSequenceGenerator = new Crypto.PRNG()
-            };
-            using var image = new Image<Rgba32>(100, 100);
-
-            Assert.Throws<InvalidOperationException>(() => lsb.EmbedBytes(new byte[] { 0x01 }, image));
+            Assert.Throws<ArgumentNullException>(() => new Algorithms.LSB(null));
         }
 
         [Fact]
-        public void EmbedBytes_NullRowGenerator_ThrowsInvalidOperation()
+        public void PrngSelector_InvalidName_ThrowsInvalidOperation()
         {
-            var lsb = new Algorithms.LSB
-            {
-                ColumnSequenceGenerator = new Crypto.PRNG()
-            };
+            var lsb = new Algorithms.LSB(new PrngPixelSelector(1, 2, "NonExistent"));
             using var image = new Image<Rgba32>(100, 100);
 
-            Assert.Throws<InvalidOperationException>(() => lsb.EmbedBytes(new byte[] { 0x01 }, image));
-        }
-
-        [Fact]
-        public void ExtractBytes_NullGenerators_ThrowsInvalidOperation()
-        {
-            var lsb = new Algorithms.LSB();
-            using var image = new Image<Rgba32>(100, 100);
-
-            Assert.Throws<InvalidOperationException>(() => lsb.ExtractBytes(image));
-        }
-
-        [Fact]
-        public void EmbedBytes_UninitializedPRNG_ThrowsInvalidOperation()
-        {
-            var lsb = new Algorithms.LSB
-            {
-                RowSequenceGenerator = new Crypto.PRNG(),
-                ColumnSequenceGenerator = new Crypto.PRNG()
-            };
-            // PRNGs assigned but Initialize() never called
-            using var image = new Image<Rgba32>(100, 100);
-
-            Assert.Throws<InvalidOperationException>(() => lsb.EmbedBytes(new byte[] { 0x01 }, image));
-        }
-
-        [Fact]
-        public void PRNG_InvalidName_ThrowsInvalidOperation()
-        {
-            var prng = new Crypto.PRNG();
-            prng.Name = "NonExistent";
-
-            Assert.Throws<InvalidOperationException>(() => prng.Initialize(42));
+            Assert.Throws<InvalidOperationException>(() => lsb.EmbedBytes(new byte[] { 1 }, image));
         }
 
         [Fact]
@@ -319,7 +269,7 @@ namespace SteganoLib.Test
         [InlineData(-1)]
         public void ModifyMaxBitsInByte_LessThanOne_Throws(int value)
         {
-            var lsb = new Algorithms.LSB();
+            var lsb = CreateLSB(1);
             Assert.Throws<ArgumentOutOfRangeException>(() => lsb.ModifyMaxBitsInByte = value);
         }
 
@@ -353,6 +303,52 @@ namespace SteganoLib.Test
         {
             var lsb = CreateLSB(42);
             Assert.Throws<ArgumentNullException>(() => lsb.EmbedBytes(new byte[] { 1 }, null));
+        }
+
+        [Fact]
+        public void EmbedAndExtract_KeyedSelector_RoundTrip()
+        {
+            var key = Crypto.StegoKey.FromPassphrase("correct horse", iterations: 1000);
+            var data = new byte[500];
+            new Random(5).NextBytes(data);
+
+            // 64 * 64 pixels at one bit each hold 512 bytes including the header.
+            using var image = new Image<Rgba32>(64, 64);
+            var writer = new Algorithms.LSB(new KeyedPermutationSelector(key));
+            Assert.True(writer.EmbedBytes(data, image));
+
+            var reader = new Algorithms.LSB(new KeyedPermutationSelector(key));
+            Assert.Equal(data, reader.ExtractBytes(image));
+        }
+
+        [Fact]
+        public void EmbedAndExtract_KeyedSelector_FullCapacity_RoundTrip()
+        {
+            var key = Crypto.StegoKey.FromBytes(new byte[] { 1, 2, 3 });
+            using var image = new Image<Rgba32>(40, 40);
+            var lsb = new Algorithms.LSB(new KeyedPermutationSelector(key)) { ModifyMaxBitsInByte = 3 };
+
+            // 1600 pixels * 3 bits = 4800 bits = 600 bytes including the 4-byte header.
+            var data = new byte[596];
+            new Random(9).NextBytes(data);
+
+            Assert.True(lsb.IsPossibleToEmbed(596, image));
+            Assert.False(lsb.IsPossibleToEmbed(597, image));
+            Assert.True(lsb.EmbedBytes(data, image));
+            Assert.Equal(data, lsb.ExtractBytes(image));
+        }
+
+        [Fact]
+        public void ExtractBytes_KeyedSelector_WrongKey_ReturnsEmptyOrGarbage()
+        {
+            var data = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+            using var image = new Image<Rgba32>(64, 64);
+            new Algorithms.LSB(new KeyedPermutationSelector(Crypto.StegoKey.FromBytes(new byte[] { 1 }))).EmbedBytes(data, image);
+
+            var reader = new Algorithms.LSB(new KeyedPermutationSelector(Crypto.StegoKey.FromBytes(new byte[] { 2 })));
+            var result = reader.ExtractBytes(image);
+
+            Assert.NotEqual(data, result);
         }
     }
 }

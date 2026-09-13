@@ -19,7 +19,7 @@ namespace SteganoLib.Algorithms
         /// Saving to a lossy format (JPEG) will destroy the embedded payload.
         /// </summary>
         /// <exception cref="InvalidOperationException">If the image lacks capacity for <paramref name="data"/>.</exception>
-        public static void EmbedBytes(this IStegAlgorithm algorithm, byte[] data, string inputPath, string outputPath)
+        public static void EmbedBytes(this IStegAlgorithm<Image<Rgba32>> algorithm, byte[] data, string inputPath, string outputPath)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
@@ -36,7 +36,7 @@ namespace SteganoLib.Algorithms
         /// and write the result to <paramref name="output"/> as PNG (lossless).
         /// </summary>
         /// <exception cref="InvalidOperationException">If the image lacks capacity for <paramref name="data"/>.</exception>
-        public static void EmbedBytes(this IStegAlgorithm algorithm, byte[] data, Stream input, Stream output)
+        public static void EmbedBytes(this IStegAlgorithm<Image<Rgba32>> algorithm, byte[] data, Stream input, Stream output)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
             if (input == null) throw new ArgumentNullException(nameof(input));
@@ -51,7 +51,7 @@ namespace SteganoLib.Algorithms
         /// <summary>
         /// Load the image at <paramref name="path"/> and extract a previously embedded payload.
         /// </summary>
-        public static byte[] ExtractBytes(this IStegAlgorithm algorithm, string path)
+        public static byte[] ExtractBytes(this IStegAlgorithm<Image<Rgba32>> algorithm, string path)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
             if (path == null) throw new ArgumentNullException(nameof(path));
@@ -63,7 +63,7 @@ namespace SteganoLib.Algorithms
         /// <summary>
         /// Load an image from <paramref name="input"/> and extract a previously embedded payload.
         /// </summary>
-        public static byte[] ExtractBytes(this IStegAlgorithm algorithm, Stream input)
+        public static byte[] ExtractBytes(this IStegAlgorithm<Image<Rgba32>> algorithm, Stream input)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
             if (input == null) throw new ArgumentNullException(nameof(input));
