@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Security.Cryptography;
 
@@ -64,7 +65,8 @@ namespace SteganoLib.Algorithms
             var directions = EmbeddingMode == LsbEmbeddingMode.Match
                 ? new BitArray(RandomNumberGenerator.GetBytes(framed.Length))
                 : null;
-            using var slots = Slots(image.Width, image.Height).GetEnumerator();
+            int stableShift = StableShift();
+            using var slots = Slots(image).GetEnumerator();
 
             for (int i = 0; i < bits.Length; i++)
             {
@@ -73,7 +75,7 @@ namespace SteganoLib.Algorithms
 
                 var (x, y, channel) = slots.Current;
                 var pixel = image[x, y];
-                WriteBit(ref pixel, channel, bits[i], directions != null && directions[i]);
+                WriteBit(ref pixel, channel, bits[i], directions != null && directions[i], stableShift);
                 image[x, y] = pixel;
             }
         }
@@ -85,7 +87,7 @@ namespace SteganoLib.Algorithms
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
-            using var slots = Slots(image.Width, image.Height).GetEnumerator();
+            using var slots = Slots(image).GetEnumerator();
 
             byte[] header = new byte[HeaderSize];
             if (!ReadBytes(image, slots, header))
@@ -108,7 +110,9 @@ namespace SteganoLib.Algorithms
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
-            long pixels = (long)image.Width * image.Height;
+            long pixels = _selector is IContentAwarePixelSelector aware
+                ? aware.Pixels(image).LongCount()
+                : (long)image.Width * image.Height;
             int channels = ChannelCount;
             int perPixel = Math.Min(_bitsPerPixel, channels);
 
@@ -158,9 +162,28 @@ namespace SteganoLib.Algorithms
 
         private int ChannelCount => BitOperations.PopCount((uint)_channels);
 
+        // Bits below this position may change; a content-aware selector reads the ones above it.
+        private int StableShift()
+        {
+            if (_selector is not IContentAwarePixelSelector aware)
+                return 8;
+
+            if (aware.StableHighBits < 1 || aware.StableHighBits > 7)
+                throw new InvalidOperationException("StableHighBits must be between 1 and 7.");
+
+            return 8 - aware.StableHighBits;
+        }
+
+        private IEnumerable<Point> PixelsOf(Image<Rgba32> image)
+        {
+            return _selector is IContentAwarePixelSelector aware
+                ? aware.Pixels(image)
+                : _selector.Pixels(image.Width, image.Height);
+        }
+
         // One slot per bit: a pixel and the channel index (0 = R, 1 = G, 2 = B).
         // Channels rotate across pixels so a cycle of C bits is spread over ceil(C / M) pixels.
-        private IEnumerable<(int X, int Y, int Channel)> Slots(int width, int height)
+        private IEnumerable<(int X, int Y, int Channel)> Slots(Image<Rgba32> image)
         {
             var channels = new List<int>(3);
             if (_channels.HasFlag(ColorChannels.Red)) channels.Add(0);
@@ -170,7 +193,7 @@ namespace SteganoLib.Algorithms
             int perPixel = Math.Min(_bitsPerPixel, channels.Count);
             int next = 0;
 
-            foreach (var p in _selector.Pixels(width, height))
+            foreach (var p in PixelsOf(image))
             {
                 int written = 0;
                 while (next < channels.Count && written < perPixel)
@@ -200,17 +223,19 @@ namespace SteganoLib.Algorithms
             return true;
         }
 
-        private void WriteBit(ref Rgba32 pixel, int channel, bool bit, bool up)
+        private void WriteBit(ref Rgba32 pixel, int channel, bool bit, bool up, int stableShift)
         {
             switch (channel)
             {
-                case 0: pixel.R = Adjust(pixel.R, bit, up); break;
-                case 1: pixel.G = Adjust(pixel.G, bit, up); break;
-                default: pixel.B = Adjust(pixel.B, bit, up); break;
+                case 0: pixel.R = Adjust(pixel.R, bit, up, stableShift); break;
+                case 1: pixel.G = Adjust(pixel.G, bit, up, stableShift); break;
+                default: pixel.B = Adjust(pixel.B, bit, up, stableShift); break;
             }
         }
 
-        private byte Adjust(byte value, bool bit, bool up)
+        // Moves by one in the requested direction unless that would leave the range,
+        // or change the high bits a content-aware selector depends on.
+        private byte Adjust(byte value, bool bit, bool up, int stableShift)
         {
             if (((value & 1) == 1) == bit)
                 return value;
@@ -218,9 +243,12 @@ namespace SteganoLib.Algorithms
             if (EmbeddingMode == LsbEmbeddingMode.Replace)
                 return (byte)(bit ? (value | 1) : (value & 0xFE));
 
-            if (value == 0) return 1;
-            if (value == 255) return 254;
-            return (byte)(up ? value + 1 : value - 1);
+            bool canUp = value < 255 && ((value + 1) >> stableShift) == (value >> stableShift);
+            bool canDown = value > 0 && ((value - 1) >> stableShift) == (value >> stableShift);
+
+            if (canUp && canDown)
+                return (byte)(up ? value + 1 : value - 1);
+            return (byte)(canUp ? value + 1 : value - 1);
         }
 
         private static bool ReadBit(Rgba32 pixel, int channel)
