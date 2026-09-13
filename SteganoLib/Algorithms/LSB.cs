@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -18,6 +19,12 @@ namespace SteganoLib.Algorithms
     /// Pixel order comes from an <see cref="IPixelSelector"/>; sender and receiver
     /// must use an equivalent selector. A 4-byte big-endian length header is written
     /// in front of the payload so extraction knows where to stop.
+    /// </para>
+    /// <para>
+    /// With <see cref="LsbEmbeddingMode.Match"/> (the default) a channel whose LSB has
+    /// to change is moved up or down by one at random instead of having the bit
+    /// overwritten. Extraction is identical; the histogram artefacts that the
+    /// chi-square attack looks for are not produced.
     /// </para>
     /// </summary>
     public class LSB : IStegAlgorithm<Image<Rgba32>>
@@ -55,6 +62,9 @@ namespace SteganoLib.Algorithms
             Array.Copy(data, 0, framed, HeaderSize, data.Length);
 
             var bits = new BitArray(framed);
+            var directions = EmbeddingMode == LsbEmbeddingMode.Match
+                ? new BitArray(RandomNumberGenerator.GetBytes(framed.Length))
+                : null;
             using var slots = Slots(image.Width, image.Height).GetEnumerator();
 
             for (int i = 0; i < bits.Length; i++)
@@ -64,7 +74,7 @@ namespace SteganoLib.Algorithms
 
                 var (x, y, channel) = slots.Current;
                 var pixel = image[x, y];
-                WriteBit(ref pixel, channel, bits[i]);
+                WriteBit(ref pixel, channel, bits[i], directions != null && directions[i]);
                 image[x, y] = pixel;
             }
 
@@ -150,6 +160,9 @@ namespace SteganoLib.Algorithms
             }
         }
 
+        /// <summary>How a channel value is changed when its LSB does not match. Default <see cref="LsbEmbeddingMode.Match"/>.</summary>
+        public LsbEmbeddingMode EmbeddingMode { get; set; } = LsbEmbeddingMode.Match;
+
         /// <summary>Selector that decides the pixel order.</summary>
         public IPixelSelector PixelSelector => _selector;
 
@@ -199,14 +212,27 @@ namespace SteganoLib.Algorithms
             return true;
         }
 
-        private static void WriteBit(ref Rgba32 pixel, int channel, bool bit)
+        private void WriteBit(ref Rgba32 pixel, int channel, bool bit, bool up)
         {
             switch (channel)
             {
-                case 0: pixel.R = SetLsb(pixel.R, bit); break;
-                case 1: pixel.G = SetLsb(pixel.G, bit); break;
-                default: pixel.B = SetLsb(pixel.B, bit); break;
+                case 0: pixel.R = Adjust(pixel.R, bit, up); break;
+                case 1: pixel.G = Adjust(pixel.G, bit, up); break;
+                default: pixel.B = Adjust(pixel.B, bit, up); break;
             }
+        }
+
+        private byte Adjust(byte value, bool bit, bool up)
+        {
+            if (((value & 1) == 1) == bit)
+                return value;
+
+            if (EmbeddingMode == LsbEmbeddingMode.Replace)
+                return SetLsb(value, bit);
+
+            if (value == 0) return 1;
+            if (value == 255) return 254;
+            return (byte)(up ? value + 1 : value - 1);
         }
 
         private static bool ReadBit(Rgba32 pixel, int channel)

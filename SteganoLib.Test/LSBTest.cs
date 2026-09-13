@@ -350,5 +350,109 @@ namespace SteganoLib.Test
 
             Assert.NotEqual(data, result);
         }
+
+        [Theory]
+        [InlineData(Algorithms.LsbEmbeddingMode.Replace)]
+        [InlineData(Algorithms.LsbEmbeddingMode.Match)]
+        public void EmbedAndExtract_BothModes_RoundTrip(Algorithms.LsbEmbeddingMode mode)
+        {
+            var data = new byte[200];
+            new Random(11).NextBytes(data);
+
+            using var image = new Image<Rgba32>(100, 100);
+            var writer = CreateLSB(3);
+            writer.EmbeddingMode = mode;
+            Assert.True(writer.EmbedBytes(data, image));
+
+            Assert.Equal(data, CreateLSB(3).ExtractBytes(image));
+        }
+
+        [Fact]
+        public void EmbeddingMode_DefaultsToMatch()
+        {
+            Assert.Equal(Algorithms.LsbEmbeddingMode.Match, CreateLSB(1).EmbeddingMode);
+        }
+
+        [Fact]
+        public void Match_ChangesValuesInBothDirections()
+        {
+            var data = new byte[600];
+            new Random(2).NextBytes(data);
+
+            using var image = new Image<Rgba32>(100, 100);
+            for (int py = 0; py < 100; py++)
+                for (int px = 0; px < 100; px++)
+                    image[px, py] = new Rgba32(100, 100, 100, 255);
+
+            CreateLSB(4).EmbedBytes(data, image);
+
+            int up = 0, down = 0;
+            for (int py = 0; py < 100; py++)
+            {
+                for (int px = 0; px < 100; px++)
+                {
+                    var p = image[px, py];
+                    foreach (var v in new[] { p.R, p.G, p.B })
+                    {
+                        if (v == 101) up++;
+                        else if (v == 99) down++;
+                        else Assert.Equal(100, v);
+                    }
+                }
+            }
+
+            // Replacement would only ever produce 101 from an even value.
+            Assert.True(up > 100, $"up={up}");
+            Assert.True(down > 100, $"down={down}");
+        }
+
+        [Fact]
+        public void Replace_OnlySetsTheLowBit()
+        {
+            var data = new byte[600];
+            new Random(2).NextBytes(data);
+
+            using var image = new Image<Rgba32>(100, 100);
+            for (int py = 0; py < 100; py++)
+                for (int px = 0; px < 100; px++)
+                    image[px, py] = new Rgba32(100, 100, 100, 255);
+
+            var lsb = CreateLSB(4);
+            lsb.EmbeddingMode = Algorithms.LsbEmbeddingMode.Replace;
+            lsb.EmbedBytes(data, image);
+
+            for (int py = 0; py < 100; py++)
+                for (int px = 0; px < 100; px++)
+                {
+                    var p = image[px, py];
+                    Assert.InRange(p.R, 100, 101);
+                    Assert.InRange(p.G, 100, 101);
+                    Assert.InRange(p.B, 100, 101);
+                }
+        }
+
+        [Theory]
+        [InlineData(0, 1)]
+        [InlineData(255, 254)]
+        public void Match_StaysInsideByteRange(byte start, byte expected)
+        {
+            using var image = new Image<Rgba32>(100, 100);
+            for (int py = 0; py < 100; py++)
+                for (int px = 0; px < 100; px++)
+                    image[px, py] = new Rgba32(start, start, start, 255);
+
+            var data = new byte[600];
+            new Random(8).NextBytes(data);
+            CreateLSB(5).EmbedBytes(data, image);
+
+            for (int py = 0; py < 100; py++)
+                for (int px = 0; px < 100; px++)
+                {
+                    var p = image[px, py];
+                    Assert.True(p.R == start || p.R == expected);
+                    Assert.True(p.G == start || p.G == expected);
+                    Assert.True(p.B == start || p.B == expected);
+                }
+        }
     }
 }
