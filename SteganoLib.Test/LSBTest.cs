@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SteganoLib.Algorithms;
 using SteganoLib.Selection;
 using Xunit;
 
@@ -9,21 +10,19 @@ namespace SteganoLib.Test
 {
     public class LSBTest
     {
-        private static Algorithms.LSB CreateLSB(int seed, bool modifyR = true, bool modifyG = true, bool modifyB = true, int maxBits = 1)
+        private static Algorithms.LSB CreateLSB(int seed, ColorChannels channels = ColorChannels.All, int bitsPerPixel = 1)
         {
             return new Algorithms.LSB(new PrngPixelSelector(rowSeed: seed, columnSeed: seed + 1))
             {
-                ModifyR = modifyR,
-                ModifyG = modifyG,
-                ModifyB = modifyB,
-                ModifyMaxBitsInByte = maxBits
+                Channels = channels,
+                BitsPerPixel = bitsPerPixel
             };
         }
 
         [Fact]
         public void IsPossibleToEmbed_SufficientCapacity_ReturnsTrue()
         {
-            var lsb = CreateLSB(42);
+            IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42);
             using var image = new Image<Rgba32>(100, 100);
             Assert.True(lsb.IsPossibleToEmbed(10, image));
         }
@@ -31,7 +30,7 @@ namespace SteganoLib.Test
         [Fact]
         public void IsPossibleToEmbed_InsufficientCapacity_ReturnsFalse()
         {
-            var lsb = CreateLSB(42);
+            IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42);
             // 4 pixels total, need (1+4)*8 = 40 pixels with M=1
             using var image = new Image<Rgba32>(2, 2);
             Assert.False(lsb.IsPossibleToEmbed(1, image));
@@ -40,16 +39,17 @@ namespace SteganoLib.Test
         [Fact]
         public void IsPossibleToEmbed_ExactBoundary_ReturnsTrue()
         {
-            var lsb = CreateLSB(42);
+            IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42);
             // 1 byte data: need (1+4)*8 = 40 pixels with M=1, C=3
             using var image = new Image<Rgba32>(8, 5); // exactly 40 pixels
             Assert.True(lsb.IsPossibleToEmbed(1, image));
+            Assert.False(lsb.IsPossibleToEmbed(2, image));
         }
 
         [Fact]
         public void IsPossibleToEmbed_SingleChannel_ReducedCapacity()
         {
-            var lsb = CreateLSB(42, modifyG: false, modifyB: false);
+            IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42, ColorChannels.Red);
             // C=1, M=1: each pixel contributes 1 bit, capacity = W*H bits
             using var image = new Image<Rgba32>(10, 10); // 100 pixels
             Assert.True(lsb.IsPossibleToEmbed(8, image));  // (8+4)*8 = 96 <= 100
@@ -57,20 +57,59 @@ namespace SteganoLib.Test
         }
 
         [Fact]
-        public void IsPossibleToEmbed_NoChannelsEnabled_ReturnsFalse()
+        public void Channels_None_Throws()
         {
-            var lsb = CreateLSB(42, modifyR: false, modifyG: false, modifyB: false);
-            using var image = new Image<Rgba32>(100, 100);
-            Assert.False(lsb.IsPossibleToEmbed(1, image));
+            var lsb = CreateLSB(42);
+            Assert.Throws<ArgumentException>(() => lsb.Channels = ColorChannels.None);
+            Assert.Throws<ArgumentException>(() => lsb.Channels = (ColorChannels)8);
+        }
+
+        [Theory]
+        [InlineData(ColorChannels.All, 1, 100, 100, 1246)]     // 10000 bits / 8 - 4
+        [InlineData(ColorChannels.Red, 1, 10, 10, 8)]           // 100 bits / 8 - 4
+        [InlineData(ColorChannels.All, 3, 40, 40, 596)]         // 4800 bits / 8 - 4
+        [InlineData(ColorChannels.All, 2, 3, 1, 0)]             // 3 bits total
+        [InlineData(ColorChannels.All, 2, 100, 1, 14)]          // 50 cycles * 3 bits = 150 bits
+        [InlineData(ColorChannels.Red | ColorChannels.Blue, 2, 8, 8, 12)] // 64 pixels * 2 bits = 128 bits
+        public void Capacity_MatchesFormula(ColorChannels channels, int bitsPerPixel, int width, int height, long expected)
+        {
+            var lsb = CreateLSB(1, channels, bitsPerPixel);
+            using var image = new Image<Rgba32>(width, height);
+
+            Assert.Equal(expected, lsb.Capacity(image));
+        }
+
+        [Theory]
+        [InlineData(ColorChannels.All, 1)]
+        [InlineData(ColorChannels.All, 2)]
+        [InlineData(ColorChannels.All, 3)]
+        [InlineData(ColorChannels.Red, 1)]
+        [InlineData(ColorChannels.Green | ColorChannels.Blue, 1)]
+        [InlineData(ColorChannels.Green | ColorChannels.Blue, 2)]
+        public void Capacity_IsExactlyReachable(ColorChannels channels, int bitsPerPixel)
+        {
+            var key = Crypto.StegoKey.FromBytes(new byte[] { 9 });
+            using var image = new Image<Rgba32>(37, 23);
+            var lsb = new Algorithms.LSB(new KeyedPermutationSelector(key)) { Channels = channels, BitsPerPixel = bitsPerPixel };
+
+            int capacity = (int)lsb.Capacity(image);
+            var data = new byte[capacity];
+            new Random(capacity).NextBytes(data);
+
+            lsb.EmbedBytes(data, image);
+            Assert.Equal(data, lsb.ExtractBytes(image));
+            Assert.Throws<CapacityExceededException>(() => lsb.EmbedBytes(new byte[capacity + 1], image));
         }
 
         [Fact]
-        public void EmbedBytes_ImageTooSmall_ReturnsFalse()
+        public void EmbedBytes_ImageTooSmall_ThrowsCapacityExceeded()
         {
             var lsb = CreateLSB(42);
             using var image = new Image<Rgba32>(2, 2);
-            byte[] data = new byte[] { 0x41, 0x42, 0x43 };
-            Assert.False(lsb.EmbedBytes(data, image));
+
+            var ex = Assert.Throws<CapacityExceededException>(() => lsb.EmbedBytes(new byte[] { 0x41, 0x42, 0x43 }, image));
+            Assert.Equal(3, ex.Required);
+            Assert.Equal(0, ex.Available);
         }
 
         public static IEnumerable<object[]> RoundTripData =>
@@ -90,7 +129,7 @@ namespace SteganoLib.Test
             var embedLsb = CreateLSB(seed);
             using var image = new Image<Rgba32>(100, 100);
 
-            Assert.True(embedLsb.EmbedBytes(data, image));
+            embedLsb.EmbedBytes(data, image);
 
             var extractLsb = CreateLSB(seed);
             byte[] extracted = extractLsb.ExtractBytes(image);
@@ -108,7 +147,7 @@ namespace SteganoLib.Test
             var embedLsb = CreateLSB(42);
             using var image = new Image<Rgba32>(100, 100);
 
-            Assert.True(embedLsb.EmbedBytes(data, image));
+            embedLsb.EmbedBytes(data, image);
 
             var extractLsb = CreateLSB(42);
             byte[] extracted = extractLsb.ExtractBytes(image);
@@ -121,12 +160,12 @@ namespace SteganoLib.Test
         {
             byte[] data = new byte[] { 0x41, 0x42 };
 
-            var embedLsb = CreateLSB(42, modifyG: false, modifyB: false);
+            var embedLsb = CreateLSB(42, ColorChannels.Red);
             using var image = new Image<Rgba32>(100, 100);
 
-            Assert.True(embedLsb.EmbedBytes(data, image));
+            embedLsb.EmbedBytes(data, image);
 
-            var extractLsb = CreateLSB(42, modifyG: false, modifyB: false);
+            var extractLsb = CreateLSB(42, ColorChannels.Red);
             byte[] extracted = extractLsb.ExtractBytes(image);
 
             Assert.Equal(data, extracted);
@@ -139,12 +178,12 @@ namespace SteganoLib.Test
         {
             byte[] data = new byte[] { 0x48, 0x65, 0x6C, 0x6C, 0x6F };
 
-            var embedLsb = CreateLSB(42, maxBits: maxBits);
+            var embedLsb = CreateLSB(42, bitsPerPixel: maxBits);
             using var image = new Image<Rgba32>(100, 100);
 
-            Assert.True(embedLsb.EmbedBytes(data, image));
+            embedLsb.EmbedBytes(data, image);
 
-            var extractLsb = CreateLSB(42, maxBits: maxBits);
+            var extractLsb = CreateLSB(42, bitsPerPixel: maxBits);
             byte[] extracted = extractLsb.ExtractBytes(image);
 
             Assert.Equal(data, extracted);
@@ -156,12 +195,12 @@ namespace SteganoLib.Test
             byte[] data = new byte[] { 0xAA, 0x55 };
 
             // M=4 > C=3: channels exhaust before bit limit, so behaves like M=C
-            var embedLsb = CreateLSB(42, maxBits: 4);
+            var embedLsb = CreateLSB(42, bitsPerPixel: 4);
             using var image = new Image<Rgba32>(100, 100);
 
-            Assert.True(embedLsb.EmbedBytes(data, image));
+            embedLsb.EmbedBytes(data, image);
 
-            var extractLsb = CreateLSB(42, maxBits: 4);
+            var extractLsb = CreateLSB(42, bitsPerPixel: 4);
             byte[] extracted = extractLsb.ExtractBytes(image);
 
             Assert.Equal(data, extracted);
@@ -214,7 +253,7 @@ namespace SteganoLib.Test
         {
             var embedLsb = CreateLSB(42);
             using var image = new Image<Rgba32>(100, 100);
-            Assert.True(embedLsb.EmbedBytes(new byte[] { 0x01, 0x02, 0x03 }, image));
+            embedLsb.EmbedBytes(new byte[] { 0x01, 0x02, 0x03 }, image);
 
             for (int seed = 100; seed < 300; seed++)
             {
@@ -258,7 +297,7 @@ namespace SteganoLib.Test
                 image[x, y] = px;
             }
 
-            var lsb = CreateLSB(seed, modifyG: false, modifyB: false);
+            var lsb = CreateLSB(seed, ColorChannels.Red);
             var result = lsb.ExtractBytes(image);
 
             Assert.Empty(result);
@@ -267,16 +306,16 @@ namespace SteganoLib.Test
         [Theory]
         [InlineData(0)]
         [InlineData(-1)]
-        public void ModifyMaxBitsInByte_LessThanOne_Throws(int value)
+        public void BitsPerPixel_LessThanOne_Throws(int value)
         {
             var lsb = CreateLSB(1);
-            Assert.Throws<ArgumentOutOfRangeException>(() => lsb.ModifyMaxBitsInByte = value);
+            Assert.Throws<ArgumentOutOfRangeException>(() => lsb.BitsPerPixel = value);
         }
 
         [Fact]
         public void IsPossibleToEmbed_NegativeLength_ReturnsFalse()
         {
-            var lsb = CreateLSB(42);
+            IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42);
             using var image = new Image<Rgba32>(100, 100);
             Assert.False(lsb.IsPossibleToEmbed(-1, image));
         }
@@ -284,7 +323,7 @@ namespace SteganoLib.Test
         [Fact]
         public void IsPossibleToEmbed_HugeLength_DoesNotOverflow()
         {
-            var lsb = CreateLSB(42);
+            IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42);
             using var image = new Image<Rgba32>(100, 100);
             Assert.False(lsb.IsPossibleToEmbed(int.MaxValue, image));
             Assert.False(lsb.IsPossibleToEmbed(0x1FFFFFFC, image));
@@ -315,7 +354,7 @@ namespace SteganoLib.Test
             // 64 * 64 pixels at one bit each hold 512 bytes including the header.
             using var image = new Image<Rgba32>(64, 64);
             var writer = new Algorithms.LSB(new KeyedPermutationSelector(key));
-            Assert.True(writer.EmbedBytes(data, image));
+            writer.EmbedBytes(data, image);
 
             var reader = new Algorithms.LSB(new KeyedPermutationSelector(key));
             Assert.Equal(data, reader.ExtractBytes(image));
@@ -326,15 +365,14 @@ namespace SteganoLib.Test
         {
             var key = Crypto.StegoKey.FromBytes(new byte[] { 1, 2, 3 });
             using var image = new Image<Rgba32>(40, 40);
-            var lsb = new Algorithms.LSB(new KeyedPermutationSelector(key)) { ModifyMaxBitsInByte = 3 };
+            var lsb = new Algorithms.LSB(new KeyedPermutationSelector(key)) { BitsPerPixel = 3 };
 
             // 1600 pixels * 3 bits = 4800 bits = 600 bytes including the 4-byte header.
             var data = new byte[596];
             new Random(9).NextBytes(data);
 
-            Assert.True(lsb.IsPossibleToEmbed(596, image));
-            Assert.False(lsb.IsPossibleToEmbed(597, image));
-            Assert.True(lsb.EmbedBytes(data, image));
+            Assert.Equal(596, lsb.Capacity(image));
+            lsb.EmbedBytes(data, image);
             Assert.Equal(data, lsb.ExtractBytes(image));
         }
 
@@ -362,7 +400,7 @@ namespace SteganoLib.Test
             using var image = new Image<Rgba32>(100, 100);
             var writer = CreateLSB(3);
             writer.EmbeddingMode = mode;
-            Assert.True(writer.EmbedBytes(data, image));
+            writer.EmbedBytes(data, image);
 
             Assert.Equal(data, CreateLSB(3).ExtractBytes(image));
         }

@@ -30,15 +30,19 @@ namespace SteganoLib
 
         public PayloadEnvelope Envelope => _envelope;
 
-        /// <returns><c>false</c> when the sealed payload does not fit.</returns>
-        public bool Embed(byte[] data, TCarrier carrier, StegoKey key)
+        /// <exception cref="CapacityExceededException">The carrier cannot hold the sealed payload.</exception>
+        public void Embed(byte[] data, TCarrier carrier, StegoKey key)
         {
             if (data == null)
                 throw new ArgumentNullException(nameof(data));
             if (carrier == null)
                 throw new ArgumentNullException(nameof(carrier));
 
-            return _algorithm.EmbedBytes(_envelope.Seal(data, key), carrier);
+            long capacity = Capacity(carrier);
+            if (data.Length > capacity)
+                throw new CapacityExceededException(data.Length, capacity);
+
+            _algorithm.EmbedBytes(_envelope.Seal(data, key), carrier);
         }
 
         public ExtractResult Extract(TCarrier carrier, StegoKey key)
@@ -49,14 +53,18 @@ namespace SteganoLib
             return _envelope.Open(_algorithm.ExtractBytes(carrier), key);
         }
 
-        public bool IsPossibleToEmbed(int dataLength, TCarrier carrier)
+        /// <summary>Largest payload that fits once envelope overhead is taken off. Compression may allow more.</summary>
+        public long Capacity(TCarrier carrier)
         {
-            if (dataLength < 0)
-                throw new ArgumentOutOfRangeException(nameof(dataLength));
             if (carrier == null)
                 throw new ArgumentNullException(nameof(carrier));
 
-            return _algorithm.IsPossibleToEmbed(dataLength + _envelope.Overhead(dataLength), carrier);
+            return Math.Max(0, _algorithm.Capacity(carrier) - _envelope.Overhead);
+        }
+
+        public bool IsPossibleToEmbed(long dataLength, TCarrier carrier)
+        {
+            return dataLength >= 0 && dataLength <= Capacity(carrier);
         }
     }
 }

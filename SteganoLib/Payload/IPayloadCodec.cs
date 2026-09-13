@@ -13,6 +13,9 @@ namespace SteganoLib.Payload
         /// <summary>Stable identifier written into the envelope header.</summary>
         byte Id { get; }
 
+        /// <summary>Bytes added to the plaintext by <see cref="Seal"/>.</summary>
+        int Overhead { get; }
+
         byte[] Seal(ReadOnlySpan<byte> plaintext, StegoKey key);
 
         bool TryOpen(ReadOnlySpan<byte> sealedBody, StegoKey key, out byte[] plaintext);

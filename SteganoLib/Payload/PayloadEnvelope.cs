@@ -43,11 +43,8 @@ namespace SteganoLib.Payload
         /// <summary>Compress with Brotli before sealing. Skipped automatically when it would not shrink the data.</summary>
         public bool Compress { get; set; }
 
-        /// <summary>Extra bytes added to a payload of the given size, without compression.</summary>
-        public int Overhead(int payloadLength)
-        {
-            return _codecs[0].Seal(new byte[payloadLength], StegoKey.FromBytes(new byte[] { 0 })).Length + HeaderSize - payloadLength;
-        }
+        /// <summary>Bytes added by the header and the sealing codec. Compression never adds more.</summary>
+        public int Overhead => HeaderSize + _codecs[0].Overhead;
 
         public byte[] Seal(byte[] payload, StegoKey key)
         {

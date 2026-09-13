@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Security.Cryptography;
 
 using SixLabors.ImageSharp;
@@ -30,29 +31,27 @@ namespace SteganoLib.Algorithms
     public class LSB : IStegAlgorithm<Image<Rgba32>>
     {
         private const int HeaderSize = 4;
-        private const int HeaderBits = HeaderSize * 8;
 
         private readonly IPixelSelector _selector;
-        private int _modifyMaxBitsInByte = 1;
+        private ColorChannels _channels = ColorChannels.All;
+        private int _bitsPerPixel = 1;
 
         public LSB(IPixelSelector selector)
         {
             _selector = selector ?? throw new ArgumentNullException(nameof(selector));
         }
 
-        /// <summary>
-        /// Embed <paramref name="data"/> into <paramref name="image"/> in place.
-        /// </summary>
-        /// <returns><c>false</c> if the image lacks capacity for the payload.</returns>
-        public bool EmbedBytes(byte[] data, Image<Rgba32> image)
+        /// <inheritdoc />
+        public void EmbedBytes(byte[] data, Image<Rgba32> image)
         {
             if (data == null)
                 throw new ArgumentNullException(nameof(data));
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
-            if (!IsPossibleToEmbed(data.Length, image))
-                return false;
+            long capacity = Capacity(image);
+            if (data.Length > capacity)
+                throw new CapacityExceededException(data.Length, capacity);
 
             byte[] framed = new byte[HeaderSize + data.Length];
             framed[0] = (byte)(data.Length >> 24);
@@ -70,23 +69,17 @@ namespace SteganoLib.Algorithms
             for (int i = 0; i < bits.Length; i++)
             {
                 if (!slots.MoveNext())
-                    return false;
+                    throw new CapacityExceededException(data.Length, capacity);
 
                 var (x, y, channel) = slots.Current;
                 var pixel = image[x, y];
                 WriteBit(ref pixel, channel, bits[i], directions != null && directions[i]);
                 image[x, y] = pixel;
             }
-
-            return true;
         }
 
-        /// <summary>
-        /// Extract a previously embedded payload from <paramref name="image"/>.
-        /// </summary>
-        /// <returns>
-        /// The payload, or an empty array if the length header is not plausible for this image.
-        /// </returns>
+        /// <inheritdoc />
+        /// <returns>The payload, or an empty array if the length header is not plausible for this image.</returns>
         public byte[] ExtractBytes(Image<Rgba32> image)
         {
             if (image == null)
@@ -99,7 +92,7 @@ namespace SteganoLib.Algorithms
                 return Array.Empty<byte>();
 
             int dataLength = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
-            if (dataLength < 0 || !IsPossibleToEmbed(dataLength, image))
+            if (dataLength < 0 || dataLength > Capacity(image))
                 return Array.Empty<byte>();
 
             byte[] result = new byte[dataLength];
@@ -109,54 +102,51 @@ namespace SteganoLib.Algorithms
             return result;
         }
 
-        /// <summary>
-        /// Whether <paramref name="dataLength"/> bytes plus the header fit into
-        /// <paramref name="image"/> with the current channel and bits-per-pixel settings.
-        /// Returns <c>false</c> when no channel is enabled.
-        /// </summary>
-        public bool IsPossibleToEmbed(int dataLength, Image<Rgba32> image)
+        /// <inheritdoc />
+        public long Capacity(Image<Rgba32> image)
         {
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
-            if (dataLength < 0)
-                return false;
 
-            int channels = EnabledChannelCount();
-            if (channels == 0)
-                return false;
+            long pixels = (long)image.Width * image.Height;
+            int channels = ChannelCount;
+            int perPixel = Math.Min(_bitsPerPixel, channels);
 
-            long totalBits = ((long)dataLength + HeaderSize) * 8;
-            long bitsPerPixel = Math.Min(_modifyMaxBitsInByte, channels);
-            long pixelsPerCycle = (channels + bitsPerPixel - 1) / bitsPerPixel;
-            long fullCycles = totalBits / channels;
-            long remainingBits = totalBits % channels;
-            long pixelsForRemaining = (remainingBits + bitsPerPixel - 1) / bitsPerPixel;
-            long pixelsNeeded = fullCycles * pixelsPerCycle + pixelsForRemaining;
+            // A cycle spreads one bit per enabled channel over ceil(channels / perPixel) pixels.
+            long pixelsPerCycle = (channels + perPixel - 1) / perPixel;
+            long fullCycles = pixels / pixelsPerCycle;
+            long leftoverPixels = pixels % pixelsPerCycle;
+            long totalBits = fullCycles * channels + Math.Min(leftoverPixels * perPixel, channels);
 
-            return pixelsNeeded <= (long)image.Width * image.Height;
+            return Math.Max(0, totalBits / 8 - HeaderSize);
         }
 
-        /// <summary>Whether to modify the red channel. Default <c>true</c>.</summary>
-        public bool ModifyR { get; set; } = true;
-
-        /// <summary>Whether to modify the green channel. Default <c>true</c>.</summary>
-        public bool ModifyG { get; set; } = true;
-
-        /// <summary>Whether to modify the blue channel. Default <c>true</c>.</summary>
-        public bool ModifyB { get; set; } = true;
+        /// <summary>Channels that may carry bits. Default <see cref="ColorChannels.All"/>.</summary>
+        public ColorChannels Channels
+        {
+            get => _channels;
+            set
+            {
+                if ((value & ColorChannels.All) == ColorChannels.None)
+                    throw new ArgumentException("At least one channel must be enabled.", nameof(value));
+                if ((value & ~ColorChannels.All) != 0)
+                    throw new ArgumentException("Unknown channel flag.", nameof(value));
+                _channels = value;
+            }
+        }
 
         /// <summary>
-        /// Maximum number of bits written into one pixel before moving to the next one.
-        /// Default <c>1</c>. Values above the number of enabled channels behave like the channel count.
+        /// Bits written into one pixel before moving to the next one. Default <c>1</c>.
+        /// Values above the number of enabled channels behave like the channel count.
         /// </summary>
-        public int ModifyMaxBitsInByte
+        public int BitsPerPixel
         {
-            get => _modifyMaxBitsInByte;
+            get => _bitsPerPixel;
             set
             {
                 if (value < 1)
                     throw new ArgumentOutOfRangeException(nameof(value), "Must be at least 1.");
-                _modifyMaxBitsInByte = value;
+                _bitsPerPixel = value;
             }
         }
 
@@ -166,20 +156,18 @@ namespace SteganoLib.Algorithms
         /// <summary>Selector that decides the pixel order.</summary>
         public IPixelSelector PixelSelector => _selector;
 
-        private int EnabledChannelCount() => (ModifyR ? 1 : 0) + (ModifyG ? 1 : 0) + (ModifyB ? 1 : 0);
+        private int ChannelCount => BitOperations.PopCount((uint)_channels);
 
         // One slot per bit: a pixel and the channel index (0 = R, 1 = G, 2 = B).
         // Channels rotate across pixels so a cycle of C bits is spread over ceil(C / M) pixels.
         private IEnumerable<(int X, int Y, int Channel)> Slots(int width, int height)
         {
             var channels = new List<int>(3);
-            if (ModifyR) channels.Add(0);
-            if (ModifyG) channels.Add(1);
-            if (ModifyB) channels.Add(2);
-            if (channels.Count == 0)
-                yield break;
+            if (_channels.HasFlag(ColorChannels.Red)) channels.Add(0);
+            if (_channels.HasFlag(ColorChannels.Green)) channels.Add(1);
+            if (_channels.HasFlag(ColorChannels.Blue)) channels.Add(2);
 
-            int perPixel = Math.Min(_modifyMaxBitsInByte, channels.Count);
+            int perPixel = Math.Min(_bitsPerPixel, channels.Count);
             int next = 0;
 
             foreach (var p in _selector.Pixels(width, height))
@@ -228,7 +216,7 @@ namespace SteganoLib.Algorithms
                 return value;
 
             if (EmbeddingMode == LsbEmbeddingMode.Replace)
-                return SetLsb(value, bit);
+                return (byte)(bit ? (value | 1) : (value & 0xFE));
 
             if (value == 0) return 1;
             if (value == 255) return 254;
@@ -245,7 +233,5 @@ namespace SteganoLib.Algorithms
             };
             return (value & 1) == 1;
         }
-
-        private static byte SetLsb(byte value, bool bit) => (byte)(bit ? (value | 1) : (value & 0xFE));
     }
 }

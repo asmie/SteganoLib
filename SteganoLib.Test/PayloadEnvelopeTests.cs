@@ -147,7 +147,8 @@ namespace SteganoLib.Test
             var envelope = new PayloadEnvelope();
             var payload = new byte[100];
 
-            Assert.Equal(envelope.Seal(payload, Key).Length - payload.Length, envelope.Overhead(payload.Length));
+            Assert.Equal(envelope.Seal(payload, Key).Length - payload.Length, envelope.Overhead);
+            Assert.Equal(5 + 32, new PayloadEnvelope(new HmacPayloadCodec()).Overhead);
         }
 
         [Fact]

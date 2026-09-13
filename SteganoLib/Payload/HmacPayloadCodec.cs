@@ -17,6 +17,8 @@ namespace SteganoLib.Payload
 
         public byte Id => 2;
 
+        public int Overhead => TagSize;
+
         public byte[] Seal(ReadOnlySpan<byte> plaintext, StegoKey key)
         {
             if (key == null)

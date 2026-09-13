@@ -25,7 +25,7 @@ namespace SteganoLib.Test
             new Random(3).NextBytes(data);
             using var image = new Image<Rgba32>(80, 80);
 
-            Assert.True(CreatePipeline(key).Embed(data, image, key));
+            CreatePipeline(key).Embed(data, image, key);
             var result = CreatePipeline(key).Extract(image, key);
 
             Assert.Equal(ExtractionStatus.Success, result.Status);
@@ -75,8 +75,9 @@ namespace SteganoLib.Test
             // 8x8 = 64 pixels = 64 bits = 8 bytes; header alone needs 4 + 5 + 28.
             using var image = new Image<Rgba32>(8, 8);
 
+            Assert.Equal(0, pipeline.Capacity(image));
             Assert.False(pipeline.IsPossibleToEmbed(1, image));
-            Assert.False(pipeline.Embed(new byte[] { 1 }, image, key));
+            Assert.Throws<CapacityExceededException>(() => pipeline.Embed(new byte[] { 1 }, image, key));
         }
 
         [Fact]
@@ -90,7 +91,7 @@ namespace SteganoLib.Test
             {
                 using (var image = new Image<Rgba32>(32, 32))
                 {
-                    Assert.True(CreatePipeline(key).Embed(data, image, key));
+                    CreatePipeline(key).Embed(data, image, key);
                     image.SaveAsPng(path);
                 }
 
@@ -101,6 +102,65 @@ namespace SteganoLib.Test
             {
                 File.Delete(path);
             }
+        }
+
+        [Fact]
+        public void Capacity_IsAlgorithmCapacityMinusOverhead()
+        {
+            var key = StegoKey.FromBytes(new byte[] { 1 });
+            var pipeline = CreatePipeline(key);
+            using var image = new Image<Rgba32>(100, 100);
+
+            Assert.Equal(pipeline.Algorithm.Capacity(image) - pipeline.Envelope.Overhead, pipeline.Capacity(image));
+
+            var data = new byte[pipeline.Capacity(image)];
+            new Random(1).NextBytes(data);
+            pipeline.Embed(data, image, key);
+            Assert.Equal(data, pipeline.Extract(image, key).Data);
+        }
+
+        [Fact]
+        public void FileHelpers_RoundTrip()
+        {
+            var key = StegoKey.FromBytes(new byte[] { 3 });
+            var data = new byte[] { 1, 2, 3, 4 };
+            var input = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".png");
+            var output = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".png");
+
+            try
+            {
+                using (var image = new Image<Rgba32>(32, 32))
+                    image.SaveAsPng(input);
+
+                CreatePipeline(key).Embed(data, input, output, key);
+                var result = CreatePipeline(key).Extract(output, key);
+
+                Assert.Equal(ExtractionStatus.Success, result.Status);
+                Assert.Equal(data, result.Data);
+            }
+            finally
+            {
+                File.Delete(input);
+                File.Delete(output);
+            }
+        }
+
+        [Fact]
+        public void StreamHelpers_RoundTrip()
+        {
+            var key = StegoKey.FromBytes(new byte[] { 4 });
+            var data = new byte[] { 9, 8, 7 };
+
+            using var input = new MemoryStream();
+            using (var image = new Image<Rgba32>(32, 32))
+                image.SaveAsPng(input);
+            input.Position = 0;
+
+            using var output = new MemoryStream();
+            CreatePipeline(key).Embed(data, input, output, key);
+            output.Position = 0;
+
+            Assert.Equal(data, CreatePipeline(key).Extract(output, key).Data);
         }
     }
 }
