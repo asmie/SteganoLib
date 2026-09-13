@@ -41,17 +41,21 @@ namespace SteganoLib.Algorithms
                 throw new InvalidOperationException("ColumnSequenceGenerator has not been set.");
             if (RowSequenceGenerator == null)
                 throw new InvalidOperationException("RowSequenceGenerator has not been set.");
+            if (data == null)
+                throw new ArgumentNullException(nameof(data));
+            if (image == null)
+                throw new ArgumentNullException(nameof(image));
 
             if (!IsPossibleToEmbed(data.Length, image))
                 return false;
 
             // Prepend 4-byte big-endian length header
-            byte[] combined = new byte[4 + data.Length];
+            byte[] combined = new byte[HeaderSize + data.Length];
             combined[0] = (byte)(data.Length >> 24);
             combined[1] = (byte)(data.Length >> 16);
             combined[2] = (byte)(data.Length >> 8);
             combined[3] = (byte)(data.Length);
-            Array.Copy(data, 0, combined, 4, data.Length);
+            Array.Copy(data, 0, combined, HeaderSize, data.Length);
 
             BitArray bits = new BitArray(combined);
             bool RUsed = true, GUsed = true, BUsed = true;
@@ -130,6 +134,8 @@ namespace SteganoLib.Algorithms
                 throw new InvalidOperationException("ColumnSequenceGenerator has not been set.");
             if (RowSequenceGenerator == null)
                 throw new InvalidOperationException("RowSequenceGenerator has not been set.");
+            if (image == null)
+                throw new ArgumentNullException(nameof(image));
 
             bool RUsed = true, GUsed = true, BUsed = true;
             int x = 0, y = 0;
@@ -206,7 +212,8 @@ namespace SteganoLib.Algorithms
                     if (dataLength < 0 || !IsPossibleToEmbed(dataLength, image))
                         return Array.Empty<byte>();
 
-                    bitsNeeded = (dataLength + 4) * 8;
+                    // Capacity check above bounds this by the pixel count, so it fits an int.
+                    bitsNeeded = (int)TotalBits(dataLength);
                 }
             }
 
@@ -237,17 +244,24 @@ namespace SteganoLib.Algorithms
             if (enabledChannels == 0)
                 return false;
 
-            int totalBits = (dataLength + 4) * 8;
-            int pixelsPerCycle = (enabledChannels + ModifyMaxBitsInByte - 1) / ModifyMaxBitsInByte;
-            int fullCycles = totalBits / enabledChannels;
-            int remainingBits = totalBits % enabledChannels;
-            int pixelsForRemaining = remainingBits > 0
-                ? (remainingBits + ModifyMaxBitsInByte - 1) / ModifyMaxBitsInByte
-                : 0;
-            int totalPixelsNeeded = fullCycles * pixelsPerCycle + pixelsForRemaining;
+            if (dataLength < 0)
+                return false;
 
-            return totalPixelsNeeded <= image.Width * image.Height;
+            long totalBits = TotalBits(dataLength);
+            long pixelsPerCycle = (enabledChannels + _modifyMaxBitsInByte - 1) / _modifyMaxBitsInByte;
+            long fullCycles = totalBits / enabledChannels;
+            long remainingBits = totalBits % enabledChannels;
+            long pixelsForRemaining = remainingBits > 0
+                ? (remainingBits + _modifyMaxBitsInByte - 1) / _modifyMaxBitsInByte
+                : 0;
+            long totalPixelsNeeded = fullCycles * pixelsPerCycle + pixelsForRemaining;
+
+            return totalPixelsNeeded <= (long)image.Width * image.Height;
         }
+
+        private static long TotalBits(long dataLength) => (dataLength + HeaderSize) * 8;
+
+        private const int HeaderSize = 4;
 
         /// <summary>Whether to modify the red channel. Default <c>true</c>.</summary>
         public bool ModifyR { get; set; } = true;
@@ -263,7 +277,18 @@ namespace SteganoLib.Algorithms
         /// next PRNG-selected pixel. Default <c>1</c>. Values above the number of
         /// enabled channels are effectively clamped to the channel count.
         /// </summary>
-        public int ModifyMaxBitsInByte { get; set; } = 1;
+        public int ModifyMaxBitsInByte
+        {
+            get => _modifyMaxBitsInByte;
+            set
+            {
+                if (value < 1)
+                    throw new ArgumentOutOfRangeException(nameof(value), "Must be at least 1.");
+                _modifyMaxBitsInByte = value;
+            }
+        }
+
+        private int _modifyMaxBitsInByte = 1;
 
         /// <summary>
         /// PRNG used to draw row indices for pixel selection. Must be set and

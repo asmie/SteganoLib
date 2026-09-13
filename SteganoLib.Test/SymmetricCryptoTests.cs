@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
@@ -160,6 +161,50 @@ namespace SteganoLib.Test
             decryptor.Mode = CipherMode.CBC;
 
             Assert.ThrowsAny<CryptographicException>(() => decryptor.DecryptMemory(encrypted));
+        }
+
+        [Fact]
+        public void EncryptMemory_UnknownAlgorithm_ThrowsInvalidOperation()
+        {
+            var crypto = new Crypto.SymmetricCrypto
+            {
+                Key = Encoding.UTF8.GetBytes("1234567890123456"),
+                KeyType = Crypto.SymmetricCrypto.KeyTypes.Plain,
+                Algorithm = "DoesNotExist"
+            };
+
+            Assert.Throws<InvalidOperationException>(() => crypto.EncryptMemory(new byte[] { 1 }));
+        }
+
+        [Fact]
+        public void EncryptMemory_NullInput_ThrowsArgumentNull()
+        {
+            var crypto = new Crypto.SymmetricCrypto { Key = Encoding.UTF8.GetBytes("1234567890123456") };
+            var ex = Assert.Throws<ArgumentNullException>(() => crypto.EncryptMemory(null));
+            Assert.Equal("plain", ex.ParamName);
+        }
+
+        [Fact]
+        public void EncryptMemory_EmptyInput_ThrowsArgument()
+        {
+            var crypto = new Crypto.SymmetricCrypto { Key = Encoding.UTF8.GetBytes("1234567890123456") };
+            var ex = Assert.Throws<ArgumentException>(() => crypto.EncryptMemory(System.Array.Empty<byte>()));
+            Assert.Equal("plain", ex.ParamName);
+        }
+
+        [Fact]
+        public void DecryptMemory_EmptyInput_ThrowsArgument()
+        {
+            var crypto = new Crypto.SymmetricCrypto { Key = Encoding.UTF8.GetBytes("1234567890123456") };
+            var ex = Assert.Throws<ArgumentException>(() => crypto.DecryptMemory(System.Array.Empty<byte>()));
+            Assert.Equal("encrypted", ex.ParamName);
+        }
+
+        [Fact]
+        public void EncryptMemory_EmptyKey_ThrowsInvalidOperation()
+        {
+            var crypto = new Crypto.SymmetricCrypto { Key = System.Array.Empty<byte>() };
+            Assert.Throws<InvalidOperationException>(() => crypto.EncryptMemory(new byte[] { 1 }));
         }
     }
 }

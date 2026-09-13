@@ -258,5 +258,101 @@ namespace SteganoLib.Test
                 }
             }
         }
+
+        [Fact]
+        public void ExtractBytes_WrongSeed_DoesNotThrow()
+        {
+            var embedLsb = CreateLSB(42);
+            using var image = new Image<Rgba32>(100, 100);
+            Assert.True(embedLsb.EmbedBytes(new byte[] { 0x01, 0x02, 0x03 }, image));
+
+            for (int seed = 100; seed < 300; seed++)
+            {
+                var extractLsb = CreateLSB(seed);
+                var result = extractLsb.ExtractBytes(image);
+                Assert.NotNull(result);
+            }
+        }
+
+        [Fact]
+        public void ExtractBytes_HeaderThatOverflowsInt32_ReturnsEmpty()
+        {
+            // 0x1FFFFFFC + 4 = 0x20000000; times 8 overflows a 32-bit int to zero.
+            const uint header = 0x1FFFFFFC;
+            const int seed = 7;
+
+            using var image = new Image<Rgba32>(100, 100);
+            var rowPrng = new Crypto.PRNG();
+            rowPrng.Initialize(seed);
+            var colPrng = new Crypto.PRNG();
+            colPrng.Initialize(seed + 1);
+
+            // Single channel, one bit per pixel: bit i lands in the i-th distinct pixel.
+            var used = new HashSet<(int, int)>();
+            for (int i = 0; i < 32; i++)
+            {
+                int x, y;
+                do
+                {
+                    x = colPrng.Next(image.Width);
+                    y = rowPrng.Next(image.Height);
+                } while (!used.Add((x, y)));
+
+                int byteIdx = i / 8;
+                int bitInByte = i % 8;
+                byte headerByte = (byte)(header >> (8 * (3 - byteIdx)));
+                bool bit = ((headerByte >> bitInByte) & 1) == 1;
+
+                var px = image[x, y];
+                px.R = (byte)(bit ? (px.R | 1) : (px.R & 254));
+                image[x, y] = px;
+            }
+
+            var lsb = CreateLSB(seed, modifyG: false, modifyB: false);
+            var result = lsb.ExtractBytes(image);
+
+            Assert.Empty(result);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        public void ModifyMaxBitsInByte_LessThanOne_Throws(int value)
+        {
+            var lsb = new Algorithms.LSB();
+            Assert.Throws<ArgumentOutOfRangeException>(() => lsb.ModifyMaxBitsInByte = value);
+        }
+
+        [Fact]
+        public void IsPossibleToEmbed_NegativeLength_ReturnsFalse()
+        {
+            var lsb = CreateLSB(42);
+            using var image = new Image<Rgba32>(100, 100);
+            Assert.False(lsb.IsPossibleToEmbed(-1, image));
+        }
+
+        [Fact]
+        public void IsPossibleToEmbed_HugeLength_DoesNotOverflow()
+        {
+            var lsb = CreateLSB(42);
+            using var image = new Image<Rgba32>(100, 100);
+            Assert.False(lsb.IsPossibleToEmbed(int.MaxValue, image));
+            Assert.False(lsb.IsPossibleToEmbed(0x1FFFFFFC, image));
+        }
+
+        [Fact]
+        public void EmbedBytes_NullData_ThrowsArgumentNull()
+        {
+            var lsb = CreateLSB(42);
+            using var image = new Image<Rgba32>(100, 100);
+            Assert.Throws<ArgumentNullException>(() => lsb.EmbedBytes(null, image));
+        }
+
+        [Fact]
+        public void EmbedBytes_NullImage_ThrowsArgumentNull()
+        {
+            var lsb = CreateLSB(42);
+            Assert.Throws<ArgumentNullException>(() => lsb.EmbedBytes(new byte[] { 1 }, null));
+        }
     }
 }

@@ -50,10 +50,11 @@ namespace SteganoLib.Crypto
         {
             byte[] encrypted;
 
-            if (plain == null || plain.Length <= 0)
-                throw new ArgumentNullException("plain empty");
-            if (Key == null || Key.Length <= 0)
-                throw new ArgumentNullException("key empty or invalid size");
+            if (plain == null)
+                throw new ArgumentNullException(nameof(plain));
+            if (plain.Length == 0)
+                throw new ArgumentException("Input is empty.", nameof(plain));
+            EnsureKey();
 
             using (var myAlgo = CreateInstance(Algorithm))
             {
@@ -100,10 +101,11 @@ namespace SteganoLib.Crypto
         {
             byte[] plain;
 
-            if (encrypted == null || encrypted.Length <= 0)
-                throw new ArgumentNullException("encrypted argument empty");
-            if (Key == null || Key.Length <= 0)
-                throw new ArgumentNullException("key empty or invalid");
+            if (encrypted == null)
+                throw new ArgumentNullException(nameof(encrypted));
+            if (encrypted.Length == 0)
+                throw new ArgumentException("Input is empty.", nameof(encrypted));
+            EnsureKey();
 
             using (var myAlgo = CreateInstance(Algorithm))
             {
@@ -130,6 +132,12 @@ namespace SteganoLib.Crypto
             }
 
             return plain;
+        }
+
+        private void EnsureKey()
+        {
+            if (Key == null || Key.Length == 0)
+                throw new InvalidOperationException("Key has not been set.");
         }
 
         /// <summary>
@@ -215,17 +223,16 @@ namespace SteganoLib.Crypto
         /// Static method that creates instance of algorithm that is chosen by name. Used internally by encrypt/decrypt methods.
         /// </summary>
         /// <param name="name">Algorithm name.</param>
-        /// <returns>Created instance of algorithm or null if name was not found in the registered algorithms.</returns>
+        /// <returns>Created instance of algorithm.</returns>
+        /// <exception cref="InvalidOperationException">The name is not registered.</exception>
         private static SymmetricAlgorithm CreateInstance(string name)
         {
-            if (_registeredAlgorithms.TryGetValue(name, out var type))
-            {
-                if (type == typeof(Aes))
-                    return Aes.Create();
-                return (SymmetricAlgorithm)Activator.CreateInstance(type);
-            }
+            if (name == null || !_registeredAlgorithms.TryGetValue(name, out var type))
+                throw new InvalidOperationException($"Symmetric algorithm '{name}' is not registered.");
 
-            return null;
+            if (type == typeof(Aes))
+                return Aes.Create();
+            return (SymmetricAlgorithm)Activator.CreateInstance(type);
         }
 
         /// <summary>
