@@ -14,17 +14,24 @@ namespace SteganoLib.Algorithms
     /// change is moved one step toward zero; if it becomes zero it no longer counts
     /// and the bit is re-embedded on the next one (shrinkage). Payload bits use
     /// (1, 2^k - 1, k) matrix encoding so few coefficients change; a small header
-    /// carrying k and the length is embedded first with k = 1.
+    /// carrying k, trellis parameters and the length is embedded first with k = 1.
+    /// <para>
+    /// Set <see cref="TrellisCoder"/> to replace matrix encoding with syndrome-trellis
+    /// codes driven by <see cref="CostModel"/>. Coefficients of magnitude one are then
+    /// never changed, so there is no shrinkage in the payload.
+    /// </para>
     /// </summary>
     public sealed class F5 : IStegAlgorithm<JpegImage>
     {
         private const string Purpose = "SteganoLib/f5-permutation/v1";
-        private const int HeaderSize = 5;
+        private const int HeaderSize = 7;
         private const int HeaderBits = HeaderSize * 8;
         private const int AcPerBlock = 63;
 
         private readonly byte[] _keyMaterial;
         private int _maxK = 7;
+        private int _maxTrellisWidth = 64;
+        private ICoefficientCostModel _costModel = new MagnitudeCostModel();
 
         public F5(StegoKey key)
         {
@@ -46,6 +53,28 @@ namespace SteganoLib.Algorithms
             }
         }
 
+        /// <summary>Syndrome-trellis coder for the payload; <c>null</c> (default) uses F5 matrix encoding.</summary>
+        public SyndromeTrellisCoder TrellisCoder { get; set; }
+
+        /// <summary>Cost of changing a coefficient, consulted only when <see cref="TrellisCoder"/> is set. Default <see cref="MagnitudeCostModel"/>.</summary>
+        public ICoefficientCostModel CostModel
+        {
+            get => _costModel;
+            set => _costModel = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        /// <summary>Upper bound on cover coefficients per message bit for the trellis code (1 to 255). Default 64.</summary>
+        public int MaxTrellisWidth
+        {
+            get => _maxTrellisWidth;
+            set
+            {
+                if (value < 1 || value > 255)
+                    throw new ArgumentOutOfRangeException(nameof(value), "Must be between 1 and 255.");
+                _maxTrellisWidth = value;
+            }
+        }
+
         /// <inheritdoc />
         public void EmbedBytes(byte[] data, JpegImage image)
         {
@@ -59,21 +88,40 @@ namespace SteganoLib.Algorithms
                 throw new CapacityExceededException(data.Length, capacity);
 
             var arrays = Arrays(image);
+            if (TrellisCoder != null)
+            {
+                var work = CloneAll(arrays);
+                if (!TryEmbedWithTrellis(work, image, data))
+                    throw new CapacityExceededException(data.Length, capacity);
+                CopyAll(work, arrays);
+                return;
+            }
+
             for (int k = ChooseK(image, data.Length); k >= 1; k--)
             {
-                var work = new short[arrays.Length][];
-                for (int i = 0; i < arrays.Length; i++)
-                    work[i] = (short[])arrays[i].Clone();
-
+                var work = CloneAll(arrays);
                 if (TryEmbed(work, image, data, k))
                 {
-                    for (int i = 0; i < arrays.Length; i++)
-                        Array.Copy(work[i], arrays[i], arrays[i].Length);
+                    CopyAll(work, arrays);
                     return;
                 }
             }
 
             throw new CapacityExceededException(data.Length, capacity);
+        }
+
+        private static short[][] CloneAll(short[][] arrays)
+        {
+            var work = new short[arrays.Length][];
+            for (int i = 0; i < arrays.Length; i++)
+                work[i] = (short[])arrays[i].Clone();
+            return work;
+        }
+
+        private static void CopyAll(short[][] from, short[][] to)
+        {
+            for (int i = 0; i < from.Length; i++)
+                Array.Copy(from[i], to[i], to[i].Length);
         }
 
         /// <inheritdoc />
@@ -90,14 +138,40 @@ namespace SteganoLib.Algorithms
                 return Array.Empty<byte>();
 
             int k = header[0];
-            int length = (header[1] << 24) | (header[2] << 16) | (header[3] << 8) | header[4];
+            int height = header[1];
+            int width = header[2];
+            int length = (header[3] << 24) | (header[4] << 16) | (header[5] << 8) | header[6];
             if (k < 1 || k > 15 || length < 0 || (long)length * 8 > CountNonZero(arrays).NonZero)
                 return Array.Empty<byte>();
 
             var payload = new byte[length];
-            if (!ReadBits(refs, k, payload, (long)length * 8))
+            if (height == 0)
+            {
+                if (width != 0 || !ReadBits(refs, k, payload, (long)length * 8))
+                    return Array.Empty<byte>();
+                return payload;
+            }
+
+            if (height < SyndromeTrellisCoder.MinHeight || height > SyndromeTrellisCoder.MaxHeight || width < 1)
                 return Array.Empty<byte>();
 
+            long messageBits = (long)length * 8;
+            var stego = new bool[messageBits * width];
+            for (long i = 0; i < stego.Length; i++)
+            {
+                if (!refs.MoveNext())
+                    return Array.Empty<byte>();
+                var (array, index) = refs.Current;
+                stego[i] = Bit(array[index]);
+            }
+
+            var message = new bool[messageBits];
+            new SyndromeTrellisCoder(height).Extract(stego, message);
+            for (long i = 0; i < messageBits; i++)
+            {
+                if (message[i])
+                    payload[i / 8] |= (byte)(1 << (int)(i % 8));
+            }
             return payload;
         }
 
@@ -145,16 +219,72 @@ namespace SteganoLib.Algorithms
 
         private bool TryEmbed(short[][] work, JpegImage image, byte[] data, int k)
         {
-            var header = new byte[HeaderSize];
-            header[0] = (byte)k;
-            header[1] = (byte)(data.Length >> 24);
-            header[2] = (byte)(data.Length >> 16);
-            header[3] = (byte)(data.Length >> 8);
-            header[4] = (byte)data.Length;
+            using var refs = NonZero(work, image).GetEnumerator();
+            return WriteBits(refs, 1, new BitArray(Header(k, 0, 0, data.Length)))
+                && WriteBits(refs, k, new BitArray(data));
+        }
+
+        private bool TryEmbedWithTrellis(short[][] work, JpegImage image, byte[] data)
+        {
+            long messageBits = (long)data.Length * 8;
+
+            // The header takes at most one coefficient per bit plus one per shrunk one.
+            long available = CountNonZero(work).NonZero - 2 * HeaderBits;
+            int width = messageBits == 0 ? 1 : (int)Math.Min(_maxTrellisWidth, available / Math.Max(1, messageBits));
+            if (width < 1)
+                return false;
 
             using var refs = NonZero(work, image).GetEnumerator();
-            return WriteBits(refs, 1, new BitArray(header))
-                && WriteBits(refs, k, new BitArray(data));
+            if (!WriteBits(refs, 1, new BitArray(Header(1, TrellisCoder.ConstraintHeight, width, data.Length))))
+                return false;
+
+            long coverBits = messageBits * width;
+            var positions = new (short[] Array, int Index)[coverBits];
+            var cover = new bool[coverBits];
+            var costs = new double[coverBits];
+            for (long i = 0; i < coverBits; i++)
+            {
+                if (!refs.MoveNext())
+                    return false;
+                positions[i] = refs.Current;
+                cover[i] = Bit(positions[i].Array[positions[i].Index]);
+                costs[i] = _costModel.Cost(positions[i].Array[positions[i].Index], positions[i].Index % 64);
+            }
+
+            var message = new bool[messageBits];
+            var payload = new BitArray(data);
+            for (int i = 0; i < message.Length; i++)
+                message[i] = payload[i];
+
+            var stego = new bool[coverBits];
+            if (double.IsPositiveInfinity(TrellisCoder.Embed(cover, costs, message, stego)))
+                return false;
+
+            for (long i = 0; i < coverBits; i++)
+            {
+                if (stego[i] == cover[i])
+                    continue;
+                var (array, index) = positions[i];
+                array[index] = StepTowardZero(array[index]);
+                if (array[index] == 0)
+                    return false; // the cost model allowed a magnitude-one change; the receiver would lose this coefficient
+            }
+
+            return true;
+        }
+
+        private static byte[] Header(int k, int height, int width, int length)
+        {
+            return new[]
+            {
+                (byte)k,
+                (byte)height,
+                (byte)width,
+                (byte)(length >> 24),
+                (byte)(length >> 16),
+                (byte)(length >> 8),
+                (byte)length,
+            };
         }
 
         private static bool WriteBits(IEnumerator<(short[] Array, int Index)> refs, int k, BitArray bits)

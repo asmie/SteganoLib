@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SteganoLib.Coding;
 using SteganoLib.Selection;
 
 namespace SteganoLib.Algorithms
@@ -19,8 +20,8 @@ namespace SteganoLib.Algorithms
     /// </para>
     /// <para>
     /// Pixel order comes from an <see cref="IPixelSelector"/>; sender and receiver
-    /// must use an equivalent selector. A 4-byte big-endian length header is written
-    /// in front of the payload so extraction knows where to stop.
+    /// must use an equivalent selector. A 6-byte header (trellis height, trellis
+    /// width, big-endian length) is written in front of the payload.
     /// </para>
     /// <para>
     /// With <see cref="LsbEmbeddingMode.Match"/> (the default) a channel whose LSB has
@@ -28,14 +29,22 @@ namespace SteganoLib.Algorithms
     /// overwritten. Extraction is identical; the histogram artefacts that the
     /// chi-square attack looks for are not produced.
     /// </para>
+    /// <para>
+    /// Set <see cref="TrellisCoder"/> to embed the payload with syndrome-trellis codes:
+    /// the coder picks which slots to change so the total <see cref="CostModel"/> cost
+    /// is small. The header is still written plainly so the receiver can size the code.
+    /// </para>
     /// </summary>
     public class LSB : IStegAlgorithm<Image<Rgba32>>
     {
-        private const int HeaderSize = 4;
+        private const int HeaderSize = 6;
+        private const int HeaderBits = HeaderSize * 8;
 
         private readonly IPixelSelector _selector;
         private ColorChannels _channels = ColorChannels.All;
         private int _bitsPerPixel = 1;
+        private int _maxTrellisWidth = 64;
+        private IPixelCostModel _costModel = new TextureCostModel();
 
         public LSB(IPixelSelector selector)
         {
@@ -54,34 +63,24 @@ namespace SteganoLib.Algorithms
             if (data.Length > capacity)
                 throw new CapacityExceededException(data.Length, capacity);
 
-            byte[] framed = new byte[HeaderSize + data.Length];
-            framed[0] = (byte)(data.Length >> 24);
-            framed[1] = (byte)(data.Length >> 16);
-            framed[2] = (byte)(data.Length >> 8);
-            framed[3] = (byte)data.Length;
-            Array.Copy(data, 0, framed, HeaderSize, data.Length);
-
-            var bits = new BitArray(framed);
-            var directions = EmbeddingMode == LsbEmbeddingMode.Match
-                ? new BitArray(RandomNumberGenerator.GetBytes(framed.Length))
-                : null;
             int stableShift = StableShift();
-            using var slots = Slots(image).GetEnumerator();
+            var directions = EmbeddingMode == LsbEmbeddingMode.Match
+                ? new BitArray(RandomNumberGenerator.GetBytes(HeaderSize + data.Length))
+                : null;
 
-            for (int i = 0; i < bits.Length; i++)
+            if (TrellisCoder == null)
             {
-                if (!slots.MoveNext())
-                    throw new CapacityExceededException(data.Length, capacity);
-
-                var (x, y, channel) = slots.Current;
-                var pixel = image[x, y];
-                WriteBit(ref pixel, channel, bits[i], directions != null && directions[i], stableShift);
-                image[x, y] = pixel;
+                using var slots = Slots(image).GetEnumerator();
+                Write(image, slots, new BitArray(Header(0, 0, data.Length)), directions, 0, stableShift, capacity, data.Length);
+                Write(image, slots, new BitArray(data), directions, HeaderBits, stableShift, capacity, data.Length);
+                return;
             }
+
+            EmbedWithTrellis(data, image, directions, stableShift, capacity);
         }
 
         /// <inheritdoc />
-        /// <returns>The payload, or an empty array if the length header is not plausible for this image.</returns>
+        /// <returns>The payload, or an empty array if the header is not plausible for this image.</returns>
         public byte[] ExtractBytes(Image<Rgba32> image)
         {
             if (image == null)
@@ -89,18 +88,48 @@ namespace SteganoLib.Algorithms
 
             using var slots = Slots(image).GetEnumerator();
 
-            byte[] header = new byte[HeaderSize];
+            var header = new byte[HeaderSize];
             if (!ReadBytes(image, slots, header))
                 return Array.Empty<byte>();
 
-            int dataLength = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
+            int height = header[0];
+            int width = header[1];
+            int dataLength = (header[2] << 24) | (header[3] << 16) | (header[4] << 8) | header[5];
             if (dataLength < 0 || dataLength > Capacity(image))
                 return Array.Empty<byte>();
 
-            byte[] result = new byte[dataLength];
-            if (!ReadBytes(image, slots, result))
+            var result = new byte[dataLength];
+            if (height == 0)
+            {
+                if (width != 0 || !ReadBytes(image, slots, result))
+                    return Array.Empty<byte>();
+                return result;
+            }
+
+            if (height < SyndromeTrellisCoder.MinHeight || height > SyndromeTrellisCoder.MaxHeight || width < 1)
                 return Array.Empty<byte>();
 
+            long messageBits = (long)dataLength * 8;
+            long coverBits = messageBits * width;
+            if (coverBits > TotalSlots(image) - HeaderBits)
+                return Array.Empty<byte>();
+
+            var stego = new bool[coverBits];
+            for (long i = 0; i < coverBits; i++)
+            {
+                if (!slots.MoveNext())
+                    return Array.Empty<byte>();
+                var (x, y, channel) = slots.Current;
+                stego[i] = ReadBit(image[x, y], channel);
+            }
+
+            var message = new bool[messageBits];
+            new SyndromeTrellisCoder(height).Extract(stego, message);
+            for (long i = 0; i < messageBits; i++)
+            {
+                if (message[i])
+                    result[i / 8] |= (byte)(1 << (int)(i % 8));
+            }
             return result;
         }
 
@@ -110,19 +139,7 @@ namespace SteganoLib.Algorithms
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
-            long pixels = _selector is IContentAwarePixelSelector aware
-                ? aware.Pixels(image).LongCount()
-                : (long)image.Width * image.Height;
-            int channels = ChannelCount;
-            int perPixel = Math.Min(_bitsPerPixel, channels);
-
-            // A cycle spreads one bit per enabled channel over ceil(channels / perPixel) pixels.
-            long pixelsPerCycle = (channels + perPixel - 1) / perPixel;
-            long fullCycles = pixels / pixelsPerCycle;
-            long leftoverPixels = pixels % pixelsPerCycle;
-            long totalBits = fullCycles * channels + Math.Min(leftoverPixels * perPixel, channels);
-
-            return Math.Max(0, totalBits / 8 - HeaderSize);
+            return Math.Max(0, TotalSlots(image) / 8 - HeaderSize);
         }
 
         /// <summary>Channels that may carry bits. Default <see cref="ColorChannels.All"/>.</summary>
@@ -160,7 +177,137 @@ namespace SteganoLib.Algorithms
         /// <summary>Selector that decides the pixel order.</summary>
         public IPixelSelector PixelSelector => _selector;
 
+        /// <summary>Syndrome-trellis coder for the payload; <c>null</c> (default) writes bits directly.</summary>
+        public SyndromeTrellisCoder TrellisCoder { get; set; }
+
+        /// <summary>Cost of changing a slot, consulted only when <see cref="TrellisCoder"/> is set. Default <see cref="TextureCostModel"/>.</summary>
+        public IPixelCostModel CostModel
+        {
+            get => _costModel;
+            set => _costModel = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        /// <summary>
+        /// Upper bound on cover bits per message bit for the trellis code (1 to 255).
+        /// More cover bits give fewer changes but cost time and memory. Default 64.
+        /// </summary>
+        public int MaxTrellisWidth
+        {
+            get => _maxTrellisWidth;
+            set
+            {
+                if (value < 1 || value > 255)
+                    throw new ArgumentOutOfRangeException(nameof(value), "Must be between 1 and 255.");
+                _maxTrellisWidth = value;
+            }
+        }
+
+        private void EmbedWithTrellis(byte[] data, Image<Rgba32> image, BitArray directions, int stableShift, long capacity)
+        {
+            long messageBits = (long)data.Length * 8;
+            long available = TotalSlots(image) - HeaderBits;
+            int width = messageBits == 0 ? 1 : (int)Math.Min(_maxTrellisWidth, available / messageBits);
+            if (width < 1)
+                throw new CapacityExceededException(data.Length, capacity);
+
+            using var slots = Slots(image).GetEnumerator();
+            var headerSlots = Take(slots, HeaderBits);
+            var coverSlots = Take(slots, messageBits * width);
+            if (headerSlots.Count != HeaderBits || coverSlots.Count != messageBits * width)
+                throw new CapacityExceededException(data.Length, capacity);
+
+            // Costs come from the untouched cover, before the header is written.
+            var cover = new bool[coverSlots.Count];
+            var costs = new double[coverSlots.Count];
+            for (int i = 0; i < coverSlots.Count; i++)
+            {
+                var (x, y, channel) = coverSlots[i];
+                cover[i] = ReadBit(image[x, y], channel);
+                costs[i] = _costModel.Cost(image, x, y, channel);
+            }
+
+            var message = new bool[messageBits];
+            var payload = new BitArray(data);
+            for (int i = 0; i < message.Length; i++)
+                message[i] = payload[i];
+
+            var stego = new bool[cover.Length];
+            double distortion = TrellisCoder.Embed(cover, costs, message, stego);
+            if (double.IsPositiveInfinity(distortion))
+                throw new CapacityExceededException(data.Length, capacity);
+
+            var header = new BitArray(Header(TrellisCoder.ConstraintHeight, width, data.Length));
+            for (int i = 0; i < HeaderBits; i++)
+            {
+                var (x, y, channel) = headerSlots[i];
+                var pixel = image[x, y];
+                WriteBit(ref pixel, channel, header[i], directions != null && directions[i], stableShift);
+                image[x, y] = pixel;
+            }
+
+            for (int i = 0; i < stego.Length; i++)
+            {
+                if (stego[i] == cover[i])
+                    continue;
+                var (x, y, channel) = coverSlots[i];
+                var pixel = image[x, y];
+                WriteBit(ref pixel, channel, stego[i], directions != null && directions[(HeaderBits + i) % directions.Length], stableShift);
+                image[x, y] = pixel;
+            }
+        }
+
+        private static byte[] Header(int height, int width, int length)
+        {
+            return new[]
+            {
+                (byte)height,
+                (byte)width,
+                (byte)(length >> 24),
+                (byte)(length >> 16),
+                (byte)(length >> 8),
+                (byte)length,
+            };
+        }
+
+        private static List<(int X, int Y, int Channel)> Take(IEnumerator<(int X, int Y, int Channel)> slots, long count)
+        {
+            var list = new List<(int X, int Y, int Channel)>((int)Math.Min(count, int.MaxValue));
+            for (long i = 0; i < count && slots.MoveNext(); i++)
+                list.Add(slots.Current);
+            return list;
+        }
+
+        private void Write(Image<Rgba32> image, IEnumerator<(int X, int Y, int Channel)> slots, BitArray bits, BitArray directions, int directionOffset, int stableShift, long capacity, int dataLength)
+        {
+            for (int i = 0; i < bits.Length; i++)
+            {
+                if (!slots.MoveNext())
+                    throw new CapacityExceededException(dataLength, capacity);
+
+                var (x, y, channel) = slots.Current;
+                var pixel = image[x, y];
+                WriteBit(ref pixel, channel, bits[i], directions != null && directions[directionOffset + i], stableShift);
+                image[x, y] = pixel;
+            }
+        }
+
         private int ChannelCount => BitOperations.PopCount((uint)_channels);
+
+        // Number of bit slots the selector and channel settings expose for this image.
+        private long TotalSlots(Image<Rgba32> image)
+        {
+            long pixels = _selector is IContentAwarePixelSelector aware
+                ? aware.Pixels(image).LongCount()
+                : (long)image.Width * image.Height;
+            int channels = ChannelCount;
+            int perPixel = Math.Min(_bitsPerPixel, channels);
+
+            // A cycle spreads one bit per enabled channel over ceil(channels / perPixel) pixels.
+            long pixelsPerCycle = (channels + perPixel - 1) / perPixel;
+            long fullCycles = pixels / pixelsPerCycle;
+            long leftoverPixels = pixels % pixelsPerCycle;
+            return fullCycles * channels + Math.Min(leftoverPixels * perPixel, channels);
+        }
 
         // Bits below this position may change; a content-aware selector reads the ones above it.
         private int StableShift()

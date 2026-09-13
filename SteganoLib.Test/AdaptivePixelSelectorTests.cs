@@ -167,7 +167,7 @@ namespace SteganoLib.Test
             var lsb = new LSB(selector) { BitsPerPixel = 3 };
 
             long selected = selector.Pixels(image).LongCount();
-            Assert.Equal(selected * 3 / 8 - 4, lsb.Capacity(image));
+            Assert.Equal(selected * 3 / 8 - 6, lsb.Capacity(image));
 
             Assert.Throws<CapacityExceededException>(() => lsb.EmbedBytes(new byte[lsb.Capacity(image) + 1], image));
         }

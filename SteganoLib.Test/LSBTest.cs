@@ -31,7 +31,7 @@ namespace SteganoLib.Test
         public void IsPossibleToEmbed_InsufficientCapacity_ReturnsFalse()
         {
             IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42);
-            // 4 pixels total, need (1+4)*8 = 40 pixels with M=1
+            // 4 pixels total, far below the 6-byte header.
             using var image = new Image<Rgba32>(2, 2);
             Assert.False(lsb.IsPossibleToEmbed(1, image));
         }
@@ -40,8 +40,8 @@ namespace SteganoLib.Test
         public void IsPossibleToEmbed_ExactBoundary_ReturnsTrue()
         {
             IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42);
-            // 1 byte data: need (1+4)*8 = 40 pixels with M=1, C=3
-            using var image = new Image<Rgba32>(8, 5); // exactly 40 pixels
+            // 1 byte data: need (1+6)*8 = 56 pixels with M=1, C=3
+            using var image = new Image<Rgba32>(8, 7); // exactly 56 pixels
             Assert.True(lsb.IsPossibleToEmbed(1, image));
             Assert.False(lsb.IsPossibleToEmbed(2, image));
         }
@@ -52,8 +52,8 @@ namespace SteganoLib.Test
             IStegAlgorithm<Image<Rgba32>> lsb = CreateLSB(42, ColorChannels.Red);
             // C=1, M=1: each pixel contributes 1 bit, capacity = W*H bits
             using var image = new Image<Rgba32>(10, 10); // 100 pixels
-            Assert.True(lsb.IsPossibleToEmbed(8, image));  // (8+4)*8 = 96 <= 100
-            Assert.False(lsb.IsPossibleToEmbed(9, image)); // (9+4)*8 = 104 > 100
+            Assert.True(lsb.IsPossibleToEmbed(6, image));  // (6+6)*8 = 96 <= 100
+            Assert.False(lsb.IsPossibleToEmbed(7, image)); // (7+6)*8 = 104 > 100
         }
 
         [Fact]
@@ -65,12 +65,12 @@ namespace SteganoLib.Test
         }
 
         [Theory]
-        [InlineData(ColorChannels.All, 1, 100, 100, 1246)]     // 10000 bits / 8 - 4
-        [InlineData(ColorChannels.Red, 1, 10, 10, 8)]           // 100 bits / 8 - 4
-        [InlineData(ColorChannels.All, 3, 40, 40, 596)]         // 4800 bits / 8 - 4
+        [InlineData(ColorChannels.All, 1, 100, 100, 1244)]     // 10000 bits / 8 - 6
+        [InlineData(ColorChannels.Red, 1, 10, 10, 6)]           // 100 bits / 8 - 6
+        [InlineData(ColorChannels.All, 3, 40, 40, 594)]         // 4800 bits / 8 - 6
         [InlineData(ColorChannels.All, 2, 3, 1, 0)]             // 3 bits total
-        [InlineData(ColorChannels.All, 2, 100, 1, 14)]          // 50 cycles * 3 bits = 150 bits
-        [InlineData(ColorChannels.Red | ColorChannels.Blue, 2, 8, 8, 12)] // 64 pixels * 2 bits = 128 bits
+        [InlineData(ColorChannels.All, 2, 100, 1, 12)]          // 50 cycles * 3 bits = 150 bits
+        [InlineData(ColorChannels.Red | ColorChannels.Blue, 2, 8, 8, 10)] // 64 pixels * 2 bits = 128 bits
         public void Capacity_MatchesFormula(ColorChannels channels, int bitsPerPixel, int width, int height, long expected)
         {
             var lsb = CreateLSB(1, channels, bitsPerPixel);
@@ -266,8 +266,8 @@ namespace SteganoLib.Test
         [Fact]
         public void ExtractBytes_HeaderThatOverflowsInt32_ReturnsEmpty()
         {
-            // 0x1FFFFFFC + 4 = 0x20000000; times 8 overflows a 32-bit int to zero.
-            const uint header = 0x1FFFFFFC;
+            // Length 0x1FFFFFFC + header, times 8, overflows a 32-bit int to a small value.
+            byte[] header = { 0, 0, 0x1F, 0xFF, 0xFF, 0xFC };
             const int seed = 7;
 
             using var image = new Image<Rgba32>(100, 100);
@@ -278,7 +278,7 @@ namespace SteganoLib.Test
 
             // Single channel, one bit per pixel: bit i lands in the i-th distinct pixel.
             var used = new HashSet<(int, int)>();
-            for (int i = 0; i < 32; i++)
+            for (int i = 0; i < header.Length * 8; i++)
             {
                 int x, y;
                 do
@@ -287,11 +287,7 @@ namespace SteganoLib.Test
                     y = rowPrng.Next(image.Height);
                 } while (!used.Add((x, y)));
 
-                int byteIdx = i / 8;
-                int bitInByte = i % 8;
-                byte headerByte = (byte)(header >> (8 * (3 - byteIdx)));
-                bool bit = ((headerByte >> bitInByte) & 1) == 1;
-
+                bool bit = ((header[i / 8] >> (i % 8)) & 1) == 1;
                 var px = image[x, y];
                 px.R = (byte)(bit ? (px.R | 1) : (px.R & 254));
                 image[x, y] = px;
@@ -351,7 +347,7 @@ namespace SteganoLib.Test
             var data = new byte[500];
             new Random(5).NextBytes(data);
 
-            // 64 * 64 pixels at one bit each hold 512 bytes including the header.
+            // 64 * 64 pixels at one bit each hold 512 bytes including the 6-byte header.
             using var image = new Image<Rgba32>(64, 64);
             var writer = new Algorithms.LSB(new KeyedPermutationSelector(key));
             writer.EmbedBytes(data, image);
@@ -367,11 +363,11 @@ namespace SteganoLib.Test
             using var image = new Image<Rgba32>(40, 40);
             var lsb = new Algorithms.LSB(new KeyedPermutationSelector(key)) { BitsPerPixel = 3 };
 
-            // 1600 pixels * 3 bits = 4800 bits = 600 bytes including the 4-byte header.
-            var data = new byte[596];
+            // 1600 pixels * 3 bits = 4800 bits = 600 bytes including the 6-byte header.
+            var data = new byte[594];
             new Random(9).NextBytes(data);
 
-            Assert.Equal(596, lsb.Capacity(image));
+            Assert.Equal(594, lsb.Capacity(image));
             lsb.EmbedBytes(data, image);
             Assert.Equal(data, lsb.ExtractBytes(image));
         }
