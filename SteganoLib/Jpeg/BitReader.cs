@@ -2,28 +2,20 @@ using System.IO;
 
 namespace SteganoLib.Jpeg
 {
-    /// <summary>
-    /// Reads entropy-coded data. Unstuffs 0xFF00, stops at any marker and feeds
-    /// zero bits from then on, the way libjpeg tolerates a short scan.
-    /// </summary>
+    /// <summary>Reads entropy-coded data, unstuffs 0xFF00 and rejects truncated scans.</summary>
     internal sealed class BitReader
     {
         private readonly byte[] _data;
         private int _pos;
         private uint _buffer;
         private int _bitCount;
-        private int _markerPos = -1;
+        private int _nextRestart;
 
         public BitReader(byte[] data, int start)
         {
             _data = data;
             _pos = start;
         }
-
-        /// <summary>Offset of the marker that ended the data, or the end of the buffer.</summary>
-        public int EndPosition => _markerPos >= 0 ? _markerPos : _pos;
-
-        public bool MarkerHit => _markerPos >= 0;
 
         public int ReadBit()
         {
@@ -42,78 +34,59 @@ namespace SteganoLib.Jpeg
             return value;
         }
 
-        /// <summary>Consume the pending RSTn marker and restart bit alignment.</summary>
+        /// <summary>Validate padding and consume the next restart marker in the RST0–RST7 cycle.</summary>
         public void Restart()
         {
-            _buffer = 0;
-            _bitCount = 0;
-
-            if (_markerPos < 0)
-            {
-                // Data ran exactly to the marker; find it from the current position.
-                SkipToMarker();
-            }
-
-            if (_markerPos < 0 || _markerPos + 1 >= _data.Length || !JpegMarker.IsRestart(_data[_markerPos + 1]))
-                throw new InvalidDataException("Expected a restart marker.");
-
-            _pos = _markerPos + 2;
-            _markerPos = -1;
+            Align();
+            int marker = Marker();
+            if (marker != JpegMarker.Rst0 + _nextRestart)
+                throw new InvalidDataException("Missing or out-of-order restart marker.");
+            _pos++;
+            _nextRestart = (_nextRestart + 1) & 7;
         }
 
-        private void SkipToMarker()
+        /// <summary>Validate the scan's padding and return the following marker's offset.</summary>
+        public int FinishScan()
         {
-            while (_pos + 1 < _data.Length)
-            {
-                if (_data[_pos] == JpegMarker.Prefix && _data[_pos + 1] != JpegMarker.Stuffing && _data[_pos + 1] != JpegMarker.Prefix)
-                {
-                    _markerPos = _pos;
-                    return;
-                }
+            Align();
+            int start = _pos;
+            Marker();
+            return start;
+        }
+
+        private void Align()
+        {
+            uint mask = (1u << _bitCount) - 1;
+            if ((_buffer & mask) != mask)
+                throw new InvalidDataException("Invalid JPEG scan padding.");
+            _buffer = 0;
+            _bitCount = 0;
+        }
+
+        // Fill bytes are legal before a marker. Iterate so long runs cannot exhaust the stack.
+        private byte Marker()
+        {
+            if (_pos >= _data.Length || _data[_pos] != JpegMarker.Prefix)
+                throw new InvalidDataException("Expected a marker after JPEG scan data.");
+            while (_pos < _data.Length && _data[_pos] == JpegMarker.Prefix)
                 _pos++;
-            }
-            _markerPos = _data.Length;
+            if (_pos >= _data.Length || _data[_pos] == JpegMarker.Stuffing)
+                throw new InvalidDataException("Missing JPEG scan marker.");
+            return _data[_pos];
         }
 
         private void Fill()
         {
-            if (_markerPos >= 0 || _pos >= _data.Length)
-            {
-                if (_markerPos < 0)
-                    _markerPos = _data.Length;
-                _buffer = 0;
-                _bitCount = 8;
-                return;
-            }
+            if (_pos >= _data.Length)
+                throw new InvalidDataException("Truncated JPEG scan data.");
 
-            byte b = _data[_pos];
+            byte b = _data[_pos++];
             if (b == JpegMarker.Prefix)
             {
-                int next = _pos + 1 < _data.Length ? _data[_pos + 1] : JpegMarker.Eoi;
-                if (next == JpegMarker.Stuffing)
-                {
-                    _pos += 2;
-                }
-                else if (next == JpegMarker.Prefix)
-                {
-                    // Fill byte; skip and retry.
-                    _pos++;
-                    Fill();
-                    return;
-                }
-                else
-                {
-                    _markerPos = _pos;
-                    _buffer = 0;
-                    _bitCount = 8;
-                    return;
-                }
-            }
-            else
-            {
+                if (_pos >= _data.Length || _data[_pos] != JpegMarker.Stuffing)
+                    throw new InvalidDataException("Unexpected marker in JPEG scan data.");
                 _pos++;
             }
-
             _buffer = b;
             _bitCount = 8;
         }

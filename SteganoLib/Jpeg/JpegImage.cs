@@ -5,7 +5,7 @@ using System.IO;
 namespace SteganoLib.Jpeg
 {
     /// <summary>
-    /// A baseline JPEG opened at the coefficient level. Quantised DCT coefficients can
+    /// An 8-bit baseline or extended-sequential JPEG opened at the coefficient level. Quantised DCT coefficients can
     /// be changed and the file written back without a second lossy compression;
     /// quantisation tables and metadata segments are preserved and Huffman tables are
     /// rebuilt for the new coefficient statistics.
@@ -74,8 +74,8 @@ namespace SteganoLib.Jpeg
             }
         }
 
-        /// <exception cref="NotSupportedException">Progressive, arithmetic, lossless or 12-bit files.</exception>
-        /// <exception cref="InvalidDataException">The file is not a valid JPEG.</exception>
+        /// <exception cref="NotSupportedException">Unsupported JPEG processes, deferred height or quantisation-table redefinition after use.</exception>
+        /// <exception cref="InvalidDataException">Invalid structure, tables, scan data or padding. Truncated scans are not repaired.</exception>
         public static JpegImage Load(string path)
         {
             if (path == null) throw new ArgumentNullException(nameof(path));

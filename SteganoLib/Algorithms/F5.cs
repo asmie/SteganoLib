@@ -146,22 +146,30 @@ namespace SteganoLib.Algorithms
             int height = header[1];
             int width = header[2];
             int length = (header[3] << 24) | (header[4] << 16) | (header[5] << 8) | header[6];
-            if (k < 1 || k > 15 || length < 0 || (long)length * 8 > CountNonZero(arrays).NonZero)
-                return Array.Empty<byte>();
-
-            var payload = new byte[length];
-            if (height == 0)
-            {
-                if (width != 0 || !ReadBits(refs, k, payload, (long)length * 8))
-                    return Array.Empty<byte>();
-                return payload;
-            }
-
-            if (height < SyndromeTrellisCoder.MinHeight || height > SyndromeTrellisCoder.MaxHeight || width < 1)
+            if (k < 1 || k > 15 || length < 0)
                 return Array.Empty<byte>();
 
             long messageBits = (long)length * 8;
-            var stego = new bool[messageBits * width];
+            long available = CountNonZero(arrays).NonZero - HeaderBits;
+            if (height == 0)
+            {
+                int groupSize = (1 << k) - 1;
+                long groups = (messageBits + k - 1) / k;
+                if (width != 0 || groups * groupSize > available)
+                    return Array.Empty<byte>();
+                var directPayload = new byte[length];
+                return ReadBits(refs, k, directPayload, messageBits) ? directPayload : Array.Empty<byte>();
+            }
+
+            if (k != 1 || height < SyndromeTrellisCoder.MinHeight || height > SyndromeTrellisCoder.MaxHeight || width < 1)
+                return Array.Empty<byte>();
+
+            long coverBits = messageBits * width;
+            if (coverBits > available || coverBits > Array.MaxLength)
+                return Array.Empty<byte>();
+
+            var payload = new byte[length];
+            var stego = new bool[coverBits];
             for (long i = 0; i < stego.Length; i++)
             {
                 if (!refs.MoveNext())

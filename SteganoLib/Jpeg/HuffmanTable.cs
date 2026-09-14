@@ -34,14 +34,18 @@ namespace SteganoLib.Jpeg
         {
             int total = 0;
             foreach (var c in Counts) total += c;
-            if (total != Symbols.Length || total > 256)
+            if (total == 0 || total != Symbols.Length || total > 256)
                 throw new InvalidDataException("Huffman table counts do not match symbol list.");
 
             int code = 0;
             int k = 0;
+            var used = new bool[256];
             for (int length = 1; length <= 16; length++)
             {
                 int n = Counts[length - 1];
+                // T.81 Annex C reserves the all-ones code at every length.
+                if (n > 0 && code + n >= (1 << length))
+                    throw new InvalidDataException("Oversubscribed Huffman table or reserved all-ones code.");
                 if (n == 0)
                 {
                     _maxCode[length] = -1;
@@ -52,6 +56,9 @@ namespace SteganoLib.Jpeg
                     _minCode[length] = code;
                     for (int i = 0; i < n; i++)
                     {
+                        if (used[Symbols[k]])
+                            throw new InvalidDataException("Duplicate Huffman symbol.");
+                        used[Symbols[k]] = true;
                         _code[Symbols[k]] = (ushort)code;
                         _size[Symbols[k]] = (byte)length;
                         code++;
@@ -70,7 +77,7 @@ namespace SteganoLib.Jpeg
             for (int length = 1; length <= 16; length++)
             {
                 code = (code << 1) | reader.ReadBit();
-                if (_maxCode[length] >= 0 && code <= _maxCode[length])
+                if (_maxCode[length] >= 0 && code >= _minCode[length] && code <= _maxCode[length])
                     return Symbols[_valPtr[length] + code - _minCode[length]];
             }
 

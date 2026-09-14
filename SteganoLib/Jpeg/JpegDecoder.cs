@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 
@@ -20,7 +21,7 @@ namespace SteganoLib.Jpeg
         private readonly List<JpegSegment> _segments = new();
         private int _restartInterval;
         private bool _frameSeen;
-        private bool _scanSeen;
+        private readonly HashSet<byte> _scannedComponents = new();
 
         public JpegDecoder(byte[] data)
         {
@@ -39,8 +40,8 @@ namespace SteganoLib.Jpeg
                 switch (marker)
                 {
                     case JpegMarker.Eoi:
-                        if (!_scanSeen)
-                            throw new InvalidDataException("JPEG has no scan data.");
+                        if (!_frameSeen || _scannedComponents.Count != _components.Count)
+                            throw new InvalidDataException("JPEG is missing scan data for one or more components.");
                         return new JpegImage(_width, _height, _frameMarker, _components, _quantTables, _restartInterval, _segments);
 
                     case JpegMarker.Sof0:
@@ -65,13 +66,13 @@ namespace SteganoLib.Jpeg
                         break;
 
                     case JpegMarker.Com:
-                        _segments.Add(new JpegSegment(marker, ReadSegmentBody()));
+                        _segments.Add(new JpegSegment(marker, ReadSegmentBody().ToArray()));
                         break;
 
                     default:
                         if (JpegMarker.IsApp(marker))
                         {
-                            _segments.Add(new JpegSegment(marker, ReadSegmentBody()));
+                            _segments.Add(new JpegSegment(marker, ReadSegmentBody().ToArray()));
                         }
                         else if (JpegMarker.IsSof(marker))
                         {
@@ -79,9 +80,9 @@ namespace SteganoLib.Jpeg
                                 ? "Progressive JPEG is not supported."
                                 : $"JPEG process 0x{marker:X2} is not supported; only baseline Huffman is.");
                         }
-                        else if (JpegMarker.IsRestart(marker))
+                        else if (JpegMarker.IsRestart(marker) || marker == JpegMarker.Soi || marker == JpegMarker.Stuffing)
                         {
-                            // Stray restart marker between segments; nothing to read.
+                            throw new InvalidDataException("Unexpected standalone JPEG marker.");
                         }
                         else
                         {
@@ -94,8 +95,8 @@ namespace SteganoLib.Jpeg
 
         private byte ReadMarker()
         {
-            while (_pos < _data.Length && _data[_pos] != JpegMarker.Prefix)
-                _pos++;
+            if (_pos >= _data.Length || _data[_pos] != JpegMarker.Prefix)
+                throw new InvalidDataException("Expected a JPEG marker.");
             while (_pos < _data.Length && _data[_pos] == JpegMarker.Prefix)
                 _pos++;
             if (_pos >= _data.Length)
@@ -104,31 +105,16 @@ namespace SteganoLib.Jpeg
             return _data[_pos++];
         }
 
-        private int ReadUInt16()
+        private ReadOnlySpan<byte> ReadSegmentBody()
         {
-            if (_pos + 2 > _data.Length)
-                throw new InvalidDataException("Unexpected end of JPEG data.");
-            int value = (_data[_pos] << 8) | _data[_pos + 1];
-            _pos += 2;
-            return value;
-        }
-
-        private byte ReadByte()
-        {
-            if (_pos >= _data.Length)
-                throw new InvalidDataException("Unexpected end of JPEG data.");
-            return _data[_pos++];
-        }
-
-        private byte[] ReadSegmentBody()
-        {
-            int length = ReadUInt16();
-            if (length < 2 || _pos + length - 2 > _data.Length)
+            if (_data.Length - _pos < 2)
+                throw new InvalidDataException("Missing segment length.");
+            int length = BinaryPrimitives.ReadUInt16BigEndian(_data.AsSpan(_pos));
+            if (length < 2 || length > _data.Length - _pos)
                 throw new InvalidDataException("Corrupt segment length.");
 
-            var body = new byte[length - 2];
-            Array.Copy(_data, _pos, body, 0, body.Length);
-            _pos += body.Length;
+            var body = _data.AsSpan(_pos + 2, length - 2);
+            _pos += length;
             return body;
         }
 
@@ -139,28 +125,37 @@ namespace SteganoLib.Jpeg
             _frameSeen = true;
             _frameMarker = marker;
 
-            int length = ReadUInt16();
-            int precision = ReadByte();
-            if (precision != 8)
-                throw new NotSupportedException($"{precision}-bit JPEG is not supported.");
-
-            _height = ReadUInt16();
-            _width = ReadUInt16();
-            int count = ReadByte();
-            if (_width == 0 || _height == 0)
-                throw new NotSupportedException("JPEG with deferred height (DNL) is not supported.");
-            if (count < 1 || count > 4 || length != 8 + 3 * count)
+            var body = ReadSegmentBody();
+            if (body.Length < 6)
                 throw new InvalidDataException("Corrupt frame header.");
+            int count = body[5];
+            if (count < 1 || count > 4 || body.Length != 6 + 3 * count)
+                throw new InvalidDataException("Corrupt frame header.");
+            int precision = body[0];
+            if (precision != 8)
+            {
+                if (precision == 12)
+                    throw new NotSupportedException("12-bit JPEG is not supported.");
+                throw new InvalidDataException("Invalid sequential JPEG sample precision.");
+            }
+
+            _height = BinaryPrimitives.ReadUInt16BigEndian(body.Slice(1));
+            _width = BinaryPrimitives.ReadUInt16BigEndian(body.Slice(3));
+            if (_width == 0)
+                throw new InvalidDataException("JPEG width must be positive.");
+            if (_height == 0)
+                throw new NotSupportedException("JPEG with deferred height (DNL) is not supported.");
 
             var raw = new (byte Id, int H, int V, int Tq)[count];
+            var ids = new HashSet<byte>();
             int hMax = 1, vMax = 1;
             for (int i = 0; i < count; i++)
             {
-                byte id = ReadByte();
-                byte hv = ReadByte();
-                byte tq = ReadByte();
+                byte id = body[6 + 3 * i];
+                byte hv = body[7 + 3 * i];
+                byte tq = body[8 + 3 * i];
                 int h = hv >> 4, v = hv & 15;
-                if (h < 1 || h > 4 || v < 1 || v > 4 || tq > 3)
+                if (!ids.Add(id) || h < 1 || h > 4 || v < 1 || v > 4 || tq > 3)
                     throw new InvalidDataException("Corrupt component descriptor.");
                 raw[i] = (id, h, v, tq);
                 hMax = Math.Max(hMax, h);
@@ -169,17 +164,33 @@ namespace SteganoLib.Jpeg
 
             int mcusPerLine = CeilDiv(_width, 8 * hMax);
             int mcusPerColumn = CeilDiv(_height, 8 * vMax);
+            long minimumBlocks = 0;
+            foreach (var (_, h, v, _) in raw)
+            {
+                long coefficients = (long)mcusPerLine * h * mcusPerColumn * v * JpegComponent.BlockSize;
+                if (coefficients > Array.MaxLength)
+                    throw new InvalidDataException("JPEG component exceeds the supported array length.");
+                minimumBlocks += (long)CeilDiv(CeilDiv(_width * h, hMax), 8)
+                    * CeilDiv(CeilDiv(_height * v, vMax), 8);
+            }
+            // Even an all-zero sequential block needs a DC code and an AC end-of-block
+            // code (at least two bits). Reject impossible dimensions before allocation.
+            if (minimumBlocks > (long)(_data.Length - _pos) * 4)
+                throw new InvalidDataException("JPEG dimensions require more scan data than the file contains.");
             foreach (var (id, h, v, tq) in raw)
                 _components.Add(new JpegComponent(id, h, v, tq, mcusPerLine * h, mcusPerColumn * v));
         }
 
         private void ReadHuffmanTables()
         {
-            int length = ReadUInt16();
-            int end = _pos + length - 2;
-            while (_pos < end)
+            var body = ReadSegmentBody();
+            if (body.IsEmpty)
+                throw new InvalidDataException("Empty DHT segment.");
+            while (!body.IsEmpty)
             {
-                byte tcTh = ReadByte();
+                if (body.Length < 17)
+                    throw new InvalidDataException("Truncated Huffman table header.");
+                byte tcTh = body[0];
                 int tableClass = tcTh >> 4, id = tcTh & 15;
                 if (tableClass > 1 || id > 3)
                     throw new InvalidDataException("Corrupt Huffman table header.");
@@ -188,48 +199,59 @@ namespace SteganoLib.Jpeg
                 int total = 0;
                 for (int i = 0; i < 16; i++)
                 {
-                    counts[i] = ReadByte();
+                    counts[i] = body[1 + i];
                     total += counts[i];
                 }
-                if (total > 256 || _pos + total > _data.Length)
+                if (total == 0 || total > 256 || total > body.Length - 17)
                     throw new InvalidDataException("Corrupt Huffman table.");
 
-                var symbols = new byte[total];
-                Array.Copy(_data, _pos, symbols, 0, total);
-                _pos += total;
+                var symbols = body.Slice(17, total).ToArray();
+                body = body.Slice(17 + total);
 
                 var table = new HuffmanTable(counts, symbols);
                 if (tableClass == 0) _dcTables[id] = table; else _acTables[id] = table;
             }
-            if (_pos != end)
-                throw new InvalidDataException("Corrupt DHT segment.");
         }
 
         private void ReadQuantizationTables()
         {
-            int length = ReadUInt16();
-            int end = _pos + length - 2;
-            while (_pos < end)
+            var body = ReadSegmentBody();
+            if (body.IsEmpty)
+                throw new InvalidDataException("Empty DQT segment.");
+            while (!body.IsEmpty)
             {
-                byte pqTq = ReadByte();
+                byte pqTq = body[0];
                 int precision = pqTq >> 4, id = pqTq & 15;
                 if (precision > 1 || id > 3)
                     throw new InvalidDataException("Corrupt quantisation table header.");
+                int tableBytes = 64 * (precision + 1);
+                if (body.Length - 1 < tableBytes)
+                    throw new InvalidDataException("Truncated quantisation table.");
 
                 var table = new ushort[64];
                 for (int i = 0; i < 64; i++)
-                    table[i] = precision == 0 ? ReadByte() : (ushort)ReadUInt16();
+                {
+                    table[i] = precision == 0 ? body[1 + i] : BinaryPrimitives.ReadUInt16BigEndian(body.Slice(1 + 2 * i));
+                    if (table[i] == 0)
+                        throw new InvalidDataException("Quantisation values must be nonzero.");
+                }
+                if (_quantTables[id] != null && !table.AsSpan().SequenceEqual(_quantTables[id]))
+                {
+                    foreach (var component in _components)
+                        if (component.QuantizationTableId == id && _scannedComponents.Contains(component.Id))
+                            throw new NotSupportedException("Redefining a quantisation table after its component scan is not supported.");
+                }
                 _quantTables[id] = table;
+                body = body.Slice(1 + tableBytes);
             }
-            if (_pos != end)
-                throw new InvalidDataException("Corrupt DQT segment.");
         }
 
         private void ReadRestartInterval()
         {
-            if (ReadUInt16() != 4)
+            var body = ReadSegmentBody();
+            if (body.Length != 2)
                 throw new InvalidDataException("Corrupt DRI segment.");
-            _restartInterval = ReadUInt16();
+            _restartInterval = BinaryPrimitives.ReadUInt16BigEndian(body);
         }
 
         private void ReadScan()
@@ -237,39 +259,49 @@ namespace SteganoLib.Jpeg
             if (!_frameSeen)
                 throw new InvalidDataException("Scan before frame header.");
 
-            int length = ReadUInt16();
-            int count = ReadByte();
-            if (count < 1 || count > 4 || length != 6 + 2 * count)
+            var body = ReadSegmentBody();
+            if (body.IsEmpty)
+                throw new InvalidDataException("Corrupt scan header.");
+            int count = body[0];
+            if (count < 1 || count > 4 || body.Length != 4 + 2 * count)
                 throw new InvalidDataException("Corrupt scan header.");
 
             var scanComponents = new (JpegComponent Component, HuffmanTable Dc, HuffmanTable Ac)[count];
+            int blocksPerMcu = 0;
             for (int i = 0; i < count; i++)
             {
-                byte id = ReadByte();
-                byte tables = ReadByte();
+                byte id = body[1 + 2 * i];
+                byte tables = body[2 + 2 * i];
+                if (!_scannedComponents.Add(id))
+                    throw new InvalidDataException("Duplicate sequential scan component.");
                 var component = _components.Find(c => c.Id == id)
                     ?? throw new InvalidDataException($"Scan references unknown component {id}.");
+                int maxTableId = _frameMarker == JpegMarker.Sof0 ? 1 : 3;
+                if ((tables >> 4) > maxTableId || (tables & 15) > maxTableId)
+                    throw new InvalidDataException("Invalid Huffman table selector.");
                 var dc = _dcTables[tables >> 4] ?? throw new InvalidDataException("Missing DC Huffman table.");
                 var ac = _acTables[tables & 15] ?? throw new InvalidDataException("Missing AC Huffman table.");
+                if (_quantTables[component.QuantizationTableId] == null)
+                    throw new InvalidDataException("Missing quantisation table.");
                 scanComponents[i] = (component, dc, ac);
+                blocksPerMcu += component.HorizontalSampling * component.VerticalSampling;
             }
 
-            int spectralStart = ReadByte();
-            int spectralEnd = ReadByte();
-            ReadByte(); // successive approximation, unused in sequential mode
-            if (spectralStart != 0 || spectralEnd != 63)
-                throw new NotSupportedException("Spectral selection is only valid in progressive JPEG.");
+            if (count > 1 && blocksPerMcu > 10)
+                throw new InvalidDataException("Interleaved scans may contain at most ten blocks per MCU.");
+
+            if (body[^3] != 0 || body[^2] != 63 || body[^1] != 0)
+                throw new InvalidDataException("Invalid sequential scan parameters.");
 
             var reader = new BitReader(_data, _pos);
             var predictors = new int[count];
-            _scanSeen = true;
 
             if (count == 1)
                 DecodeNonInterleaved(reader, scanComponents[0], predictors);
             else
                 DecodeInterleaved(reader, scanComponents, predictors);
 
-            _pos = reader.EndPosition;
+            _pos = reader.FinishScan();
         }
 
         private void DecodeNonInterleaved(BitReader reader, (JpegComponent Component, HuffmanTable Dc, HuffmanTable Ac) sc, int[] predictors)
@@ -325,8 +357,12 @@ namespace SteganoLib.Jpeg
         private static void DecodeBlock(BitReader reader, HuffmanTable dc, HuffmanTable ac, ref int predictor, Span<short> block)
         {
             int t = dc.Decode(reader);
+            if (t > 11)
+                throw new InvalidDataException("Invalid DC category for 8-bit JPEG.");
             int diff = t == 0 ? 0 : Extend(reader.ReadBits(t), t);
             predictor += diff;
+            if (predictor < -1024 || predictor > 1023)
+                throw new InvalidDataException("DC coefficient exceeds the 8-bit JPEG range.");
             block[0] = (short)predictor;
 
             int k = 1;
@@ -334,11 +370,15 @@ namespace SteganoLib.Jpeg
             {
                 int rs = ac.Decode(reader);
                 int run = rs >> 4, size = rs & 15;
+                if (size > 10 || (size == 0 && run != 0 && run != 15))
+                    throw new InvalidDataException("Invalid AC symbol for sequential 8-bit JPEG.");
                 if (size == 0)
                 {
                     if (run == 15)
                     {
                         k += 16;
+                        if (k > 64)
+                            throw new InvalidDataException("Zero run exceeds the coefficient block.");
                         continue;
                     }
                     break;

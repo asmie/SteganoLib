@@ -65,6 +65,12 @@ Custom pixel and sample selectors may return subsets. Their sequences must be fi
 
 Trellis capacity is a length budget, not a promise that every payload can be embedded under the configured costs. Positive infinity forbids a payload change, and infeasible embedding throws `CapacityExceededException` even when `Required <= Available`. The plain algorithm header ignores cost models. F5 additionally forbids changes to magnitude-one payload coefficients because shrinking them would break extraction; this restriction applies to custom cost models too. F5's default matrix mode can fall back to one bit per coefficient to fit its conservative budget. These changes retain the existing header format, although new F5 trellis embeddings may choose a different width.
 
+## JPEG input validation
+
+JPEG coefficient loading checks segment boundaries, table and component references, Huffman code trees, sequential scan parameters, restart order and scan padding. These checks follow [ITU-T T.81, Annexes B, C and F](https://www.w3.org/Graphics/JPEG/itu-t81.pdf). Truncated scans are rejected with `InvalidDataException`; the decoder no longer supplies zero bits to finish them. Valid marker fill bytes and separate component scans remain supported.
+
+Redefining a quantisation table after a component has used it is currently unsupported and throws `NotSupportedException`, because the in-memory representation cannot preserve different versions of the same table. This avoids silently changing pixels when saving. F5 extraction also checks the full coefficient requirement of matrix groups and trellis widths before allocating payload buffers.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

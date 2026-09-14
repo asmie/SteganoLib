@@ -19,7 +19,7 @@ namespace SteganoLib.Jpeg
             QuantizationTableId = quantizationTableId;
             BlocksPerLine = blocksPerLine;
             BlocksPerColumn = blocksPerColumn;
-            Coefficients = new short[blocksPerLine * blocksPerColumn * BlockSize];
+            Coefficients = new short[checked(blocksPerLine * blocksPerColumn * BlockSize)];
         }
 
         private JpegComponent(JpegComponent other)
