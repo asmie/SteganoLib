@@ -87,6 +87,16 @@ JPEG metadata loading checks marker and segment boundaries through `EOI`, includ
 
 Metadata payloads retain their existing format: entries are concatenated in file order, with no part identifiers or integrity checks. Use an authenticated `StegoPipeline` to detect payload damage. `MetadataCoding.MaxEntries` limits writing, not extraction; extraction checks store limits and the maximum byte-array length before assembling the payload. JPEG payload entries are read and replaced only before the first scan.
 
+## Crypto configuration and registration
+
+`SymmetricCrypto.Key` copies assigned key or passphrase bytes. Changing the caller's array afterward does not change the configured key; assigning `null` or an empty array clears it. Each encryption/decryption operation captures its settings before invoking the algorithm factory. Configure the object before use and do not change settings concurrently with an operation. Concurrent operations with unchanged settings are supported when the factory is thread-safe and returns a fresh algorithm for each call; each operation disposes its algorithm, including on failure.
+
+The process-wide PRNG and cipher registries use case-sensitive names and preserve the first registration. Null or blank names are rejected. Existing type-based registration remains available: PRNG types need a public constructor taking exactly one `int`, and cipher types need a public parameterless constructor. Abstract and open generic types are rejected, except `typeof(Aes)`, which continues to use `Aes.Create()`. Unsupported types return `false` without reserving the name. Constructors are checked using .NET's [public constructor reflection API](https://learn.microsoft.com/en-us/dotnet/api/system.type.getconstructors).
+
+Use `PRNG.RegisterPRNGFactory(name, seed => new CustomRandom(seed))` or `SymmetricCrypto.RegisterAlgorithmFactory(name, () => Aes.Create())` when construction needs a delegate. Registration does not invoke the factory. Factory exceptions propagate when the instance is requested; a null result raises `InvalidOperationException`. Factories may be invoked concurrently and must return separate instances. `PRNG.Name` selects the generator for the next `Initialize`; changing the name or failing to initialize preserves the previous generator and its position. Sharing a `PRNG` instance requires external synchronization.
+
+These changes retain seeded `Random` sequences and the encrypted message format. Nullability analysis is now enabled for `PRNG` and `SymmetricCrypto`; broader API annotation work remains in progress.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

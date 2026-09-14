@@ -1,21 +1,31 @@
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Text;
+using System.Reflection;
 
 namespace SteganoLib.Crypto
 {
+    /// <summary>
+    /// Named, seeded random generator. Registrations are process-wide and thread-safe;
+    /// each instance requires external synchronisation when shared between threads.
+    /// </summary>
     public sealed class PRNG
     {
 
+        /// <summary>Creates a generator using the current name. Failure preserves the previous generator and its position.</summary>
         public void Initialize(int seed)
         {
-            _random = CreateInstance(Name, seed)
-                ?? throw new InvalidOperationException($"PRNG algorithm '{Name}' is not registered.");
+            string name = Name;
+            if (!_registeredPRNG.TryGetValue(name, out var factory))
+                throw new InvalidOperationException($"PRNG algorithm '{name}' is not registered.");
+            _random = factory(seed)
+                ?? throw new InvalidOperationException($"PRNG factory '{name}' returned null.");
         }
 
         /// <summary>
-        /// Return next random.
+        /// Returns a nonnegative random integer less than <see cref="int.MaxValue"/>.
         /// </summary>
         /// <returns>Random integer.</returns>
         public int Next()
@@ -26,9 +36,9 @@ namespace SteganoLib.Crypto
         }
 
         /// <summary>
-        /// Return next random not greater than max.
+        /// Returns a nonnegative random integer less than <paramref name="max"/>, or zero when the bound is zero.
         /// </summary>
-        /// <param name="max">max value</param>
+        /// <param name="max">Exclusive upper bound; must be nonnegative.</param>
         /// <returns>Random integer.</returns>
         public int Next(int max)
         {
@@ -39,10 +49,10 @@ namespace SteganoLib.Crypto
 
 
         /// <summary>
-        /// Return next random between min and max.
+        /// Returns an integer in [min, max), or <paramref name="min"/> when the bounds are equal.
         /// </summary>
-        /// <param name="min">min random value</param>
-        /// <param name="max">max random value</param>
+        /// <param name="min">Inclusive lower bound.</param>
+        /// <param name="max">Exclusive upper bound; must be at least <paramref name="min"/>.</param>
         /// <returns>Random integer</returns>
         public int Next(int min, int max)
         {
@@ -53,56 +63,65 @@ namespace SteganoLib.Crypto
 
 
         /// <summary>
-        /// Name of the algorithm to use during operations.
+        /// Name used by the next successful <see cref="Initialize"/>. Changing it does not reset an existing generator.
         /// </summary>
         public string Name
         {
-            get; set;
-        } = "Random";
+            get => _name;
+            set
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(value);
+                _name = value;
+            }
+        }
+
+        private string _name = "Random";
 
         /// <summary>
         /// Internal object representation.
         /// Can be built-in Random type as every registered PRNG must inherit from Random class.
         /// </summary>
-        private Random _random;
+        private Random? _random;
 
         /// <summary>
-        /// Static method that creates instance of PRNG that is chosen by name.
-        /// </summary>
-        /// <param name="name">PRNG name.</param>
-        /// <param name="seed">Seed passed to the PRNG constructor.</param>
-        /// <returns>Created instance of PRNG or null if name was not found in the registered PRNG.</returns>
-        private static Random CreateInstance(string name, int seed)
-        {
-            if (_registeredPRNG.TryGetValue(name, out var type))
-                return (Random)Activator.CreateInstance(type, seed);
-
-            return null;
-        }
-
-        /// <summary>
-        /// Register a custom PRNG implementation. The type must derive from <see cref="Random"/>.
+        /// Register a concrete, closed <see cref="Random"/> type with a public constructor taking one <see cref="int"/>.
         /// Names are unique: re-registering an existing name returns <c>false</c> and leaves
         /// the existing registration untouched (no silent shadowing).
         /// </summary>
         /// <param name="name">Name of the PRNG.</param>
         /// <param name="creator">Type to be used for PRNG creation.</param>
-        /// <returns><c>true</c> if registered; <c>false</c> if the type is not a <see cref="Random"/> subclass, or if a registration with the same name already exists.</returns>
+        /// <returns><c>true</c> if registered; <c>false</c> for an unsupported type or an existing name.</returns>
         public static bool RegisterPRNG(string name, Type creator)
         {
-            if (!creator.IsSubclassOf(typeof(Random)) && creator != typeof(Random))
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+            ArgumentNullException.ThrowIfNull(creator);
+            if (!typeof(Random).IsAssignableFrom(creator) || creator.IsAbstract || creator.ContainsGenericParameters)
                 return false;
 
-            return _registeredPRNG.TryAdd(name, creator);
+            var constructor = creator.GetConstructor(BindingFlags.Public | BindingFlags.Instance | BindingFlags.ExactBinding,
+                binder: null, types: new[] { typeof(int) }, modifiers: null);
+            if (constructor == null)
+                return false;
+            return RegisterPRNGFactory(name, seed => (Random)constructor.Invoke(new object[] { seed }));
         }
 
         /// <summary>
-        /// Currently registered PRNG implementations, keyed by name.
+        /// Registers a factory without calling it. Each call must return a fresh generator seeded
+        /// with the supplied value. Factories may be called concurrently; exceptions propagate
+        /// from <see cref="Initialize"/> and null results cause <see cref="InvalidOperationException"/>.
+        /// Names are case-sensitive; an existing name returns false and is left unchanged.
         /// </summary>
-        private static readonly ConcurrentDictionary<string, Type> _registeredPRNG = new(
+        public static bool RegisterPRNGFactory(string name, Func<int, Random> factory)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+            ArgumentNullException.ThrowIfNull(factory);
+            return _registeredPRNG.TryAdd(name, factory);
+        }
+
+        private static readonly ConcurrentDictionary<string, Func<int, Random>> _registeredPRNG = new(
             new[]
             {
-                new KeyValuePair<string, Type>("Random", typeof(Random)),
+                new KeyValuePair<string, Func<int, Random>>("Random", seed => new Random(seed)),
             });
     }
 }
