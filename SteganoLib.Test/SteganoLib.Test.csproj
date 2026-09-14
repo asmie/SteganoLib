@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SteganoLib\SteganoLib.csproj" />
+    <ProjectReference Include="..\SteganoLib.Cli\SteganoLib.Cli.csproj" />
   </ItemGroup>
 
 </Project>
