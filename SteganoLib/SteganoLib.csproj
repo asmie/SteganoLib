@@ -13,8 +13,9 @@
     <Version>0.1.0</Version>
     <Authors>Piotr Olszewski</Authors>
     <Company>Piotr Olszewski</Company>
-    <Description>Steganography algorithms for the .NET ecosystem. Provides LSB (Least Significant Bit) image steganography plus supporting cryptographic utilities (PRNG, symmetric crypto).</Description>
-    <PackageTags>steganography;lsb;image;crypto</PackageTags>
+    <Description>Steganography for .NET: keyed LSB matching with adaptive selection and syndrome-trellis coding, F5 for JPEG, WAV LSB and phase coding, text and metadata carriers, video frames, an authenticated payload envelope, Reed-Solomon error correction, Shamir secret sharing, steganalysis (chi-square, RS, sample pairs) and distortion metrics.</Description>
+    <PackageTags>steganography;steganalysis;lsb;f5;jpeg;wav;image;audio;stc;reed-solomon;shamir</PackageTags>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/asmie/SteganoLib</RepositoryUrl>

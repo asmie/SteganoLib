@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\SteganoLib\SteganoLib.csproj" />
     <ProjectReference Include="..\SteganoLib.Cli\SteganoLib.Cli.csproj" />
+    <ProjectReference Include="..\samples\SteganoLib.Samples\SteganoLib.Samples.csproj" />
   </ItemGroup>
 
 </Project>

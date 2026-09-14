@@ -15,6 +15,25 @@ Project is still under development. The library currently offers:
 - steganalysis (chi-square, RS, sample pair) and distortion metrics (PSNR, SSIM, SNR);
 - the `stegano` command-line tool below.
 
+## Installation
+
+The library is published on NuGet as `SteganoLib` and the command-line tool as `SteganoLib.Cli`:
+
+```
+dotnet add package SteganoLib
+dotnet tool install --global SteganoLib.Cli
+```
+
+## Samples
+
+`samples/SteganoLib.Samples` is a runnable tour: an authenticated message in a PNG with a quality report, F5 in a JPEG, zero-width text, a metadata chunk, Reed-Solomon repair of a damaged file, a payload shared across three images, and steganalysis of LSB replacement versus matching. It builds its own covers, so it needs no input files:
+
+```
+dotnet run --project samples/SteganoLib.Samples -- ./sample-output
+```
+
+The test suite runs the samples too, so they cannot drift from the API.
+
 ## Command-line tool
 
 `SteganoLib.Cli` builds the `stegano` tool. Run it from the repository with `dotnet run --project SteganoLib.Cli --`, or pack and install it with `dotnet pack SteganoLib.Cli` and `dotnet tool install --global --add-source SteganoLib.Cli/bin/Release SteganoLib.Cli`.
@@ -71,9 +90,11 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 Please make sure to update tests as appropriate.
 
-## Versioning
+## Versioning and releases
 
-I use [SemVer](http://semver.org/) for versioning. For the versions available, see the [tags on this repository](https://github.com/asmie/SteganoLib). 
+I use [SemVer](http://semver.org/) for versioning. For the versions available, see the [tags on this repository](https://github.com/asmie/SteganoLib).
+
+Pushing a tag of the form `vX.Y.Z` runs the release workflow, which builds and tests in Release, packs `SteganoLib` and `SteganoLib.Cli` with that version, pushes both to NuGet using the `NUGET_API_KEY` repository secret, and attaches the packages to a GitHub release with generated notes. The version in the project files is only a fallback for local packing.
 
 ## Authors
 
