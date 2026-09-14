@@ -51,6 +51,8 @@ stegano compare --cover cover.png --stego stego.png
 
 The carrier type follows the file extension: PNG, BMP and TIFF use LSB matching in keyed pixel order, JPEG uses F5, WAV uses sample LSB, and text files use zero-width characters (`--text-method whitespace` or `homoglyph` for the alternatives). `--carrier metadata` hides the payload in a PNG chunk, JPEG APP segment or WAV chunk instead of the signal. Every payload is sealed with the key, so extraction reports whether a payload was found and whether it authenticates. Exit code 0 means success, 1 a failed operation such as a wrong key, and 2 a usage error.
 
+Image payloads must be saved as PNG, BMP or TIFF (`.png`, `.bmp`, `.tif`, `.tiff`). The CLI and image file helpers reject other output extensions before writing. They use explicit RGB-preserving encoder settings, including for palette and grayscale input images. PNG and BMP outputs retain alpha; TIFF output stores RGB. JPEG carriers use F5 and are handled separately. CLI image distortion reports compare the cover with the saved output.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

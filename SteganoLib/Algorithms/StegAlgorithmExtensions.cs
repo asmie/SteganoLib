@@ -11,20 +11,22 @@ namespace SteganoLib.Algorithms
     /// <summary>
     /// File and stream helpers so callers do not have to load and save the image themselves.
     /// Output written by path takes its format from the extension; it must be lossless
-    /// (PNG, BMP). Stream output is always PNG.
+    /// (PNG, BMP, TIFF). PNG and BMP retain alpha; TIFF output stores RGB. Stream output is always PNG.
     /// </summary>
     public static class StegAlgorithmExtensions
     {
         /// <exception cref="CapacityExceededException">The image cannot hold <paramref name="data"/>.</exception>
+        /// <exception cref="NotSupportedException">The output extension is not PNG, BMP or TIFF.</exception>
         public static void EmbedBytes(this IStegAlgorithm<Image<Rgba32>> algorithm, byte[] data, string inputPath, string outputPath)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
+            var encoder = LosslessImageOutput.EncoderForPath(outputPath);
             using var image = Image.Load<Rgba32>(inputPath);
             algorithm.EmbedBytes(data, image);
-            image.Save(outputPath);
+            image.Save(outputPath, encoder);
         }
 
         /// <exception cref="CapacityExceededException">The image cannot hold <paramref name="data"/>.</exception>
@@ -36,7 +38,7 @@ namespace SteganoLib.Algorithms
 
             using var image = Image.Load<Rgba32>(input);
             algorithm.EmbedBytes(data, image);
-            image.SaveAsPng(output);
+            image.Save(output, LosslessImageOutput.CreatePngEncoder());
         }
 
         public static byte[] ExtractBytes(this IStegAlgorithm<Image<Rgba32>> algorithm, string path)
@@ -58,15 +60,17 @@ namespace SteganoLib.Algorithms
         }
 
         /// <exception cref="CapacityExceededException">The image cannot hold the sealed payload.</exception>
+        /// <exception cref="NotSupportedException">The output extension is not PNG, BMP or TIFF.</exception>
         public static void Embed(this StegoPipeline<Image<Rgba32>> pipeline, byte[] data, string inputPath, string outputPath, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
+            var encoder = LosslessImageOutput.EncoderForPath(outputPath);
             using var image = Image.Load<Rgba32>(inputPath);
             pipeline.Embed(data, image, key);
-            image.Save(outputPath);
+            image.Save(outputPath, encoder);
         }
 
         /// <exception cref="CapacityExceededException">The image cannot hold the sealed payload.</exception>
@@ -78,7 +82,7 @@ namespace SteganoLib.Algorithms
 
             using var image = Image.Load<Rgba32>(input);
             pipeline.Embed(data, image, key);
-            image.SaveAsPng(output);
+            image.Save(output, LosslessImageOutput.CreatePngEncoder());
         }
 
         public static ExtractResult Extract(this StegoPipeline<Image<Rgba32>> pipeline, string path, StegoKey key)

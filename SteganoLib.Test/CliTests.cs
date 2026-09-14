@@ -160,6 +160,39 @@ namespace SteganoLib.Test
             }
         }
 
+        [Theory]
+        [InlineData(".png")]
+        [InlineData(".bmp")]
+        [InlineData(".tif")]
+        [InlineData(".tiff")]
+        public void ImageOutput_LosslessFormatsRoundTrip(string extension)
+        {
+            string output = In("stego" + extension);
+            var embed = Run("embed", "-i", Png(), "-o", output, "-m", "saved payload", "-k", KeyPath);
+            Assert.Equal(0, embed.Code);
+            Assert.Contains("PSNR", embed.Out);
+            var extract = Run("extract", "-i", output, "--as-text", "-k", KeyPath);
+            Assert.Equal(0, extract.Code);
+            Assert.Equal("saved payload", extract.Out.Trim());
+        }
+
+        [Theory]
+        [InlineData(".jpg")]
+        [InlineData(".gif")]
+        [InlineData(".webp")]
+        [InlineData(".unknown")]
+        public void ImageOutput_UnsupportedFormatIsUsageErrorAndPreservesExistingFile(string extension)
+        {
+            string output = In("existing" + extension);
+            byte[] original = { 5, 4, 3 };
+            File.WriteAllBytes(output, original);
+            var result = Run("embed", "-i", Png(), "-o", output, "-m", "hello", "-k", KeyPath);
+            Assert.Equal(2, result.Code);
+            Assert.Contains("PNG, BMP or TIFF", result.Err);
+            Assert.DoesNotContain("Embedded", result.Out);
+            Assert.Equal(original, File.ReadAllBytes(output));
+        }
+
         // ---------- other commands ----------
 
         [Fact]

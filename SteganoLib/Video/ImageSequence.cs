@@ -5,18 +5,18 @@ using System.Linq;
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SteganoLib.Algorithms;
 
 namespace SteganoLib.Video
 {
     /// <summary>
     /// A video stored as one lossless image file per frame, the usual intermediate of
     /// video tools. Frames are loaded on demand and written back to the same path, so
-    /// copy the directory first if the originals must stay untouched.
+    /// copy the directory first if the originals must stay untouched. Output must be PNG,
+    /// BMP or TIFF; TIFF output stores RGB.
     /// </summary>
     public sealed class ImageSequence : IFrameSequence<Image<Rgba32>>
     {
-        private static readonly string[] LossyExtensions = { ".jpg", ".jpeg", ".jfif", ".webp", ".gif" };
-
         private readonly List<string> _paths;
 
         public ImageSequence(IEnumerable<string> paths)
@@ -28,8 +28,7 @@ namespace SteganoLib.Video
             {
                 if (path == null)
                     throw new ArgumentException("Paths must not be null.", nameof(paths));
-                if (Array.IndexOf(LossyExtensions, Path.GetExtension(path).ToLowerInvariant()) >= 0)
-                    throw new NotSupportedException($"{path}: frames are written back in the file's own format, which must be lossless (PNG, BMP, TIFF).");
+                LosslessImageOutput.EncoderForPath(path);
             }
         }
 
@@ -61,7 +60,7 @@ namespace SteganoLib.Video
             string path = PathAt(index);
             using var image = Image.Load<Rgba32>(path);
             action(image);
-            image.Save(path);
+            image.Save(path, LosslessImageOutput.EncoderForPath(path));
         }
 
         private string PathAt(int index)

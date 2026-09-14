@@ -9,13 +9,14 @@ using SteganoLib.Payload;
 
 namespace SteganoLib.Sharing
 {
-    /// <summary>File helpers for payloads shared across several image files. Output takes its format from the extension and must be lossless.</summary>
+    /// <summary>File helpers for payloads shared across several image files. Output must be PNG, BMP or TIFF; all output formats are validated before writing. TIFF output stores RGB.</summary>
     public static class SharingExtensions
     {
         /// <exception cref="CapacityExceededException">The smallest image cannot hold its share.</exception>
         public static void EmbedBytes(this IStegAlgorithm<IReadOnlyList<Image<Rgba32>>> algorithm, byte[] data, IReadOnlyList<string> inputPaths, IReadOnlyList<string> outputPaths)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
+            ValidateOutputs(inputPaths, outputPaths);
             var images = Load(inputPaths, outputPaths);
             try
             {
@@ -46,6 +47,7 @@ namespace SteganoLib.Sharing
         public static void Embed(this StegoPipeline<IReadOnlyList<Image<Rgba32>>> pipeline, byte[] data, IReadOnlyList<string> inputPaths, IReadOnlyList<string> outputPaths, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ValidateOutputs(inputPaths, outputPaths);
             var images = Load(inputPaths, outputPaths);
             try
             {
@@ -92,10 +94,20 @@ namespace SteganoLib.Sharing
             return images;
         }
 
+        private static void ValidateOutputs(IReadOnlyList<string> inputPaths, IReadOnlyList<string> outputPaths)
+        {
+            if (inputPaths == null) throw new ArgumentNullException(nameof(inputPaths));
+            if (outputPaths == null) throw new ArgumentNullException(nameof(outputPaths));
+            if (outputPaths.Count != inputPaths.Count)
+                throw new ArgumentException("One output path per input path is required.", nameof(outputPaths));
+            foreach (var path in outputPaths)
+                LosslessImageOutput.EncoderForPath(path ?? throw new ArgumentException("Paths must not be null.", nameof(outputPaths)));
+        }
+
         private static void Save(List<Image<Rgba32>> images, IReadOnlyList<string> outputPaths)
         {
             for (int i = 0; i < images.Count; i++)
-                images[i].Save(outputPaths[i] ?? throw new ArgumentException("Paths must not be null.", nameof(outputPaths)));
+                images[i].Save(outputPaths[i], LosslessImageOutput.EncoderForPath(outputPaths[i]));
         }
 
         private static void Dispose(List<Image<Rgba32>> images)

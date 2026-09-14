@@ -211,9 +211,22 @@ namespace SteganoLib.Cli
 
         private void EmbedImage(CarrierOptions options, string outputPath, byte[] data, StegoKey key)
         {
-            using var image = Image.Load<Rgba32>(options.Input);
-            EmbedInto(Pipeline(ImageAlgorithm(key), options), data, key, outputPath, image, (c, p) => c.Save(p), c => c.Clone(),
-                (cover, stego) => DescribeImage(ImageMetrics.Compare(cover, stego)));
+            var pipeline = Pipeline(ImageAlgorithm(key), options);
+            using var cover = Image.Load<Rgba32>(options.Input);
+            long capacity = pipeline.Capacity(cover);
+            try
+            {
+                pipeline.Embed(data, options.Input, outputPath, key);
+            }
+            catch (NotSupportedException e)
+            {
+                throw new CliException(e.Message, ExitCodes.Usage);
+            }
+
+            using var stego = Image.Load<Rgba32>(outputPath);
+            _out.WriteLine($"Embedded {data.Length} bytes into {outputPath}.");
+            _out.WriteLine($"Capacity {capacity} bytes, embedding rate {Rate(capacity == 0 ? 1 : (double)data.Length / capacity)}.");
+            _out.WriteLine(DescribeImage(ImageMetrics.Compare(cover, stego)));
         }
 
         private ExtractResult ExtractImage(CarrierOptions options, StegoKey key)
