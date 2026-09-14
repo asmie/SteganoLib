@@ -155,6 +155,65 @@ namespace SteganoLib.Test
             Assert.Equal(ExtractionStatus.NotFound, pipeline.Extract(PcmAudioTests.Synthetic(40000, 2, 16), Key).Status);
         }
 
+        [Theory]
+        [InlineData(0, 0)]
+        [InlineData(10, 0)]
+        [InlineData(63, 0)]
+        [InlineData(64, 0)]
+        [InlineData(100, 0)]
+        [InlineData(100, 4096)]
+        [InlineData(4095, 4096)]
+        [InlineData(4096, 64)]
+        public void InsufficientSegmentOrHeader_EmptyPayloadIsANoOp(int frames, int segmentLength)
+        {
+            var audio = PcmAudioTests.Synthetic(frames, 2, 16);
+            var original = (int[])audio.Samples.Clone();
+            var coder = new PhaseCoding(Key) { SegmentLength = segmentLength };
+            Assert.Equal(0, coder.Capacity(audio));
+            Assert.True(((IStegAlgorithm<PcmAudio>)coder).IsPossibleToEmbed(0, audio));
+            coder.EmbedBytes(Array.Empty<byte>(), audio);
+            Assert.Equal(original, audio.Samples);
+            Assert.Empty(coder.ExtractBytes(audio));
+            Assert.Throws<CapacityExceededException>(() => coder.EmbedBytes(new byte[1], audio));
+            Assert.Equal(original, audio.Samples);
+            var pipeline = new StegoPipeline<PcmAudio>(coder);
+            Assert.False(pipeline.IsPossibleToEmbed(0, audio));
+            Assert.Throws<CapacityExceededException>(() => pipeline.Embed(Array.Empty<byte>(), audio, Key));
+            Assert.Equal(original, audio.Samples);
+        }
+
+        [Theory]
+        [InlineData(128, 0)]
+        [InlineData(128, 128)]
+        [InlineData(129, 128)]
+        [InlineData(4096, 4096)]
+        public void CompleteSegment_AdvertisedCapacityRoundTrips(int frames, int segmentLength)
+        {
+            var audio = PcmAudioTests.Synthetic(frames, 2, 16);
+            var original = (int[])audio.Samples.Clone();
+            var coder = new PhaseCoding(Key) { SegmentLength = segmentLength };
+            var payload = new byte[coder.Capacity(audio)];
+            Assert.NotEmpty(payload);
+            new Random(7).NextBytes(payload);
+            coder.EmbedBytes(payload, audio);
+            Assert.Equal(payload, coder.ExtractBytes(PcmAudio.Load(audio.ToArray())));
+            for (int i = 1; i < original.Length; i += 2)
+                Assert.Equal(original[i], audio.Samples[i]);
+            if (frames == 129)
+                Assert.Equal(original[^2], audio.Samples[^2]);
+        }
+
+        [Theory]
+        [InlineData(double.NaN)]
+        [InlineData(double.PositiveInfinity)]
+        [InlineData(double.NegativeInfinity)]
+        public void MagnitudeFloor_MustBeFinite(double value)
+        {
+            var coder = new PhaseCoding(Key);
+            Assert.Throws<ArgumentOutOfRangeException>(() => coder.MagnitudeFloorFactor = value);
+            Assert.Equal(24, coder.MagnitudeFloorFactor);
+        }
+
         [Fact]
         public void Validation()
         {

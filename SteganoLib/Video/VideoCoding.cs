@@ -41,15 +41,15 @@ namespace SteganoLib.Video
             if (payloadLength > total)
                 throw new CapacityExceededException(data.Length, Math.Max(0, total - HeaderSize));
 
+            long[] pieces = Spread ? Proportional(capacities, total, payloadLength) : Sequential(capacities, payloadLength);
+            if (!CanEmbedPieces(frames, pieces))
+                throw new CapacityExceededException(data.Length, Math.Max(0, total - HeaderSize));
+
             var payload = new byte[payloadLength];
             BinaryPrimitives.WriteUInt32BigEndian(payload, (uint)data.Length);
             data.CopyTo(payload, HeaderSize);
 
-            long[] pieces = Spread ? Proportional(capacities, total, payloadLength) : Sequential(capacities, payloadLength);
-
-            int last = pieces.Length - 1;
-            while (last > 0 && pieces[last] == 0)
-                last--;
+            int last = LastUsedFrame(pieces);
 
             long offset = 0;
             for (int i = 0; i <= last; i++)
@@ -87,6 +87,42 @@ namespace SteganoLib.Video
                 return Array.Empty<byte>();
 
             return buffer.GetBuffer().AsSpan(HeaderSize, (int)(total - HeaderSize)).ToArray();
+        }
+
+        /// <summary>Check room for the video length header and each frame's piece before modifying any frame.</summary>
+        public bool IsPossibleToEmbed(long dataLength, IFrameSequence<TFrame> frames)
+        {
+            if (frames == null) throw new ArgumentNullException(nameof(frames));
+            if (dataLength < 0 || dataLength > long.MaxValue - HeaderSize)
+                return false;
+
+            var capacities = Capacities(frames);
+            long total = Sum(capacities);
+            long payloadLength = dataLength + HeaderSize;
+            if (payloadLength > total)
+                return false;
+
+            var pieces = Spread ? Proportional(capacities, total, payloadLength) : Sequential(capacities, payloadLength);
+            return CanEmbedPieces(frames, pieces);
+        }
+
+        private bool CanEmbedPieces(IFrameSequence<TFrame> frames, long[] pieces)
+        {
+            int last = LastUsedFrame(pieces);
+            for (int i = 0; i <= last; i++)
+            {
+                if (!frames.Read(i, frame => FrameAlgorithm.IsPossibleToEmbed(pieces[i], frame)))
+                    return false;
+            }
+            return true;
+        }
+
+        private static int LastUsedFrame(long[] pieces)
+        {
+            int last = pieces.Length - 1;
+            while (last >= 0 && pieces[last] == 0)
+                last--;
+            return last;
         }
 
         public long Capacity(IFrameSequence<TFrame> frames)

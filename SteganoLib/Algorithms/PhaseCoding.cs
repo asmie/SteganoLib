@@ -40,6 +40,8 @@ namespace SteganoLib.Algorithms
         /// <summary>
         /// Samples per segment, a power of two of at least 64. 0 (default) uses the
         /// largest power of two that fits the audio, giving the most capacity.
+        /// A recording shorter than the configured segment has zero capacity. When
+        /// no complete segment can hold the header, embedding empty data is a no-op.
         /// </summary>
         public int SegmentLength
         {
@@ -61,7 +63,7 @@ namespace SteganoLib.Algorithms
             get => _magnitudeFloorFactor;
             set
             {
-                if (value < 1 || double.IsNaN(value))
+                if (value < 1 || !double.IsFinite(value))
                     throw new ArgumentOutOfRangeException(nameof(value));
                 _magnitudeFloorFactor = value;
             }
@@ -80,6 +82,10 @@ namespace SteganoLib.Algorithms
                 throw new CapacityExceededException(data.Length, capacity);
 
             int length = EffectiveSegmentLength(audio);
+            // Empty raw payloads are a no-op when even the length header cannot fit.
+            if (length == 0 || length / 2 - 1 < HeaderSize * 8)
+                return;
+
             int segments = audio.FrameCount / length;
             var spectra = new Complex[segments][];
             for (int s = 0; s < segments; s++)
@@ -136,11 +142,11 @@ namespace SteganoLib.Algorithms
             if (audio == null)
                 throw new ArgumentNullException(nameof(audio));
 
-            long capacity = Capacity(audio);
-            if (capacity < 0 || audio.FrameCount < MinSegment)
+            int length = EffectiveSegmentLength(audio);
+            if (length == 0 || length / 2 - 1 < HeaderSize * 8)
                 return Array.Empty<byte>();
 
-            int length = EffectiveSegmentLength(audio);
+            long capacity = Capacity(audio);
             var spectrum = Segment(audio, 0, length);
             Fft.Forward(spectrum);
 
@@ -164,16 +170,17 @@ namespace SteganoLib.Algorithms
         {
             if (audio == null)
                 throw new ArgumentNullException(nameof(audio));
-            if (audio.FrameCount < MinSegment)
-                return 0;
-
             int length = EffectiveSegmentLength(audio);
+            if (length == 0)
+                return 0;
             long bins = length / 2 - 1; // bins 1 .. N/2 - 1; DC and Nyquist have no usable phase
             return Math.Max(0, bins / 8 - HeaderSize);
         }
 
         private int EffectiveSegmentLength(PcmAudio audio)
         {
+            if (audio.FrameCount < MinSegment || _segmentLength > audio.FrameCount)
+                return 0;
             if (_segmentLength != 0)
                 return _segmentLength;
 

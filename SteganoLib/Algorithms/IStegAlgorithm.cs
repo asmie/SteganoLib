@@ -14,10 +14,18 @@ namespace SteganoLib.Algorithms
         /// <summary>Read back a previously embedded payload. Returns an empty array when none is found.</summary>
         byte[] ExtractBytes(TCarrier carrier);
 
-        /// <summary>Largest payload, in bytes, that <paramref name="carrier"/> can hold with the current settings.</summary>
+        /// <summary>
+        /// Payload length budget in bytes for the current settings. Zero may mean that
+        /// required framing cannot fit. Algorithms with payload-dependent costs may
+        /// reject messages within this budget; consult the implementation's contract.
+        /// </summary>
         long Capacity(TCarrier carrier);
 
-        /// <summary>Whether <paramref name="dataLength"/> bytes fit into <paramref name="carrier"/>.</summary>
+        /// <summary>
+        /// Check length and framing constraints. Implementations that require framing
+        /// even for empty payloads must override this check. Payload-dependent constraints
+        /// such as forbidden trellis changes are evaluated during embedding.
+        /// </summary>
         bool IsPossibleToEmbed(long dataLength, TCarrier carrier)
         {
             return dataLength >= 0 && dataLength <= Capacity(carrier);

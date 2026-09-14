@@ -35,7 +35,7 @@ namespace SteganoLib.Algorithms
             if (carrier == null) throw new ArgumentNullException(nameof(carrier));
 
             long capacity = Capacity(carrier);
-            if (data.Length > capacity)
+            if (!IsPossibleToEmbed(data.Length, carrier))
                 throw new CapacityExceededException(data.Length, capacity);
 
             Inner.EmbedBytes(Code.Encode(data), carrier);
@@ -53,6 +53,16 @@ namespace SteganoLib.Algorithms
             if (carrier == null) throw new ArgumentNullException(nameof(carrier));
 
             return Code.TryDecode(Inner.ExtractBytes(carrier), out data, out correctedSymbols);
+        }
+
+        /// <summary>Check the encoded length against the inner algorithm, including its framing requirements.</summary>
+        public bool IsPossibleToEmbed(long dataLength, TCarrier carrier)
+        {
+            if (carrier == null) throw new ArgumentNullException(nameof(carrier));
+            if (dataLength < 0 || dataLength > Capacity(carrier))
+                return false;
+
+            return Inner.IsPossibleToEmbed(Code.EncodedLength(dataLength), carrier);
         }
 
         public long Capacity(TCarrier carrier)

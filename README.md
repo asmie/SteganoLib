@@ -53,6 +53,14 @@ The carrier type follows the file extension: PNG, BMP and TIFF use LSB matching 
 
 Image payloads must be saved as PNG, BMP or TIFF (`.png`, `.bmp`, `.tif`, `.tiff`). The CLI and image file helpers reject other output extensions before writing. They use explicit RGB-preserving encoder settings, including for palette and grayscale input images. PNG and BMP outputs retain alpha; TIFF output stores RGB. JPEG carriers use F5 and are handled separately. CLI image distortion reports compare the cover with the saved output.
 
+## Capacity and framing
+
+`StegoPipeline.Capacity(carrier)` reports the payload budget after envelope overhead, without compression. `IsPossibleToEmbed(length, carrier)` checks that length plus framing; a zero capacity alone does not establish whether even an empty authenticated payload fits. Error correction, sharing and video also check the framing requirements of their wrapped algorithms.
+
+With `PayloadEnvelope.Compress = true` (CLI: `--compress`), embedding checks the actual sealed size, so compressible messages can exceed the reported uncompressed budget. A false length-only check does not rule out such messages. Pipeline capacity exceptions report the sealed payload size and the wrapped algorithm's capacity. Algorithms with payload-dependent constraints, such as forbidden trellis changes, may still reject a message within their length budget.
+
+For phase coding, recordings shorter than 64 samples per channel, or shorter than the configured `SegmentLength`, have zero capacity. A segment of 64 samples cannot hold the length header either. On these carriers, raw extraction returns an empty array and embedding an empty raw payload leaves the audio unchanged; nonempty payloads and authenticated envelopes are rejected.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

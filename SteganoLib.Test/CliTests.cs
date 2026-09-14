@@ -129,6 +129,21 @@ namespace SteganoLib.Test
             Assert.Equal(1, wrong.Code);
         }
 
+        [Theory]
+        [InlineData(0)]
+        [InlineData(32)]
+        public void Compression_AllowsMessagesAboveUncompressedCapacity(int parity)
+        {
+            string cover = Png(width: 64, height: 64);
+            string output = In("compressed.png");
+            string message = new string('x', 1000);
+            var embed = Run("embed", "-i", cover, "-o", output, "-m", message, "-k", KeyPath, "--compress", "--ecc", parity.ToString());
+            Assert.Equal(0, embed.Code);
+            var extracted = Run("extract", "-i", output, "--as-text", "-k", KeyPath, "--ecc", parity.ToString());
+            Assert.Equal(0, extracted.Code);
+            Assert.Equal(message, extracted.Out.Trim());
+        }
+
         [Fact]
         public void Metadata_Carrier_AndErrorCorrection()
         {

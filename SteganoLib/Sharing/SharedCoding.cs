@@ -38,7 +38,7 @@ namespace SteganoLib.Sharing
                 throw new ArgumentException($"At least {Threshold} carriers are needed, {carriers.Count} given.", nameof(carriers));
 
             long capacity = Capacity(carriers);
-            if (data.Length > capacity)
+            if (!IsPossibleToEmbed(data.Length, carriers))
                 throw new CapacityExceededException(data.Length, capacity);
 
             var shares = new ShamirSecretSharing(Threshold, carriers.Count).Split(data);
@@ -67,10 +67,28 @@ namespace SteganoLib.Sharing
             return shares.Count >= Threshold ? ShamirSecretSharing.Combine(shares) : Array.Empty<byte>();
         }
 
+        /// <summary>Check the carrier count and whether every carrier can hold the payload plus its share header.</summary>
+        public bool IsPossibleToEmbed(long dataLength, IReadOnlyList<TCarrier> carriers)
+        {
+            Validate(carriers);
+            if (carriers.Count < Threshold || dataLength < 0 || dataLength > long.MaxValue - Share.HeaderSize)
+                return false;
+
+            foreach (var carrier in carriers)
+            {
+                if (!Inner.IsPossibleToEmbed(dataLength + Share.HeaderSize, carrier))
+                    return false;
+            }
+            return true;
+        }
+
         /// <summary>Every carrier receives a share as long as the payload, so the smallest carrier decides.</summary>
         public long Capacity(IReadOnlyList<TCarrier> carriers)
         {
             Validate(carriers);
+
+            if (carriers.Count < Threshold)
+                return 0;
 
             long capacity = long.MaxValue;
             foreach (var carrier in carriers)
