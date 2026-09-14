@@ -12,8 +12,9 @@ namespace SteganoLib.Metadata
     /// marker APP<see cref="AppNumber"/> whose body starts with <see cref="Identifier"/>
     /// and a NUL byte, the way JFIF, Exif and ICC segments announce themselves. Entries
     /// are inserted after the last existing APPn segment; a segment body is limited to
-    /// 65533 bytes, so larger payloads span several segments. Works on any JPEG,
-    /// progressive included, because the scan data is copied verbatim.
+    /// 65533 bytes, so larger payloads span several segments. Supports progressive JPEG
+    /// without decoding pixels: marker framing is validated and scan bytes are preserved.
+    /// Only matching segments before the first scan are used for payload entries.
     /// Survives copying and metadata-preserving edits. Destroyed by re-encoding or by
     /// tools that strip unknown application segments.
     /// </summary>
@@ -26,10 +27,11 @@ namespace SteganoLib.Metadata
         private const int MaxSegmentBody = 0xFFFF - 2;
 
         private readonly List<JpegSegment> _segments = new();
+        private readonly Dictionary<JpegSegment, int> _prefixCounts = new();
         private readonly byte[] _tail;
         private readonly byte[] _prefix;
 
-        /// <exception cref="InvalidDataException">Not a JPEG or the header is corrupt.</exception>
+        /// <exception cref="InvalidDataException">Invalid JPEG marker framing or truncated segments, scans or end marker.</exception>
         public JpegMetadataStore(byte[] jpeg, int appNumber = DefaultAppNumber, string identifier = DefaultIdentifier)
         {
             if (jpeg == null) throw new ArgumentNullException(nameof(jpeg));
@@ -91,7 +93,13 @@ namespace SteganoLib.Metadata
                 encoded.Add(new JpegSegment(Marker, body));
             }
 
-            _segments.RemoveAll(IsMine);
+            _segments.RemoveAll(segment =>
+            {
+                if (!IsMine(segment))
+                    return false;
+                _prefixCounts.Remove(segment);
+                return true;
+            });
 
             int insertAt = 0;
             for (int i = 0; i < _segments.Count; i++)
@@ -110,8 +118,12 @@ namespace SteganoLib.Metadata
             foreach (var segment in _segments)
             {
                 int length = segment.Payload.Length + 2;
-                stream.WriteByte(JpegMarker.Prefix);
+                int prefixCount = _prefixCounts.TryGetValue(segment, out int count) ? count : 1;
+                for (int i = 0; i < prefixCount; i++)
+                    stream.WriteByte(JpegMarker.Prefix);
                 stream.WriteByte(segment.Marker);
+                if (segment.Marker == 0x01) // TEM has no length or payload.
+                    continue;
                 stream.WriteByte((byte)(length >> 8));
                 stream.WriteByte((byte)length);
                 stream.Write(segment.Payload);
@@ -120,42 +132,99 @@ namespace SteganoLib.Metadata
             return stream.ToArray();
         }
 
-        /// <summary>Reads the header segments into the segment list and returns everything from the first scan on.</summary>
+        /// <summary>Checks marker framing throughout the file, retaining scan data without decoding it.</summary>
         private byte[] Parse(byte[] jpeg)
         {
             if (!IsJpeg(jpeg))
                 throw new InvalidDataException("Not a JPEG file.");
 
             int pos = 2;
+            int tailStart = -1;
+            bool inScan = false, hasFrame = false;
             while (true)
             {
+                if (inScan)
+                {
+                    while (pos < jpeg.Length && jpeg[pos] != JpegMarker.Prefix)
+                        pos++;
+                }
                 int start = pos;
                 if (pos >= jpeg.Length || jpeg[pos] != JpegMarker.Prefix)
                     throw new InvalidDataException("Expected a JPEG marker.");
                 while (pos < jpeg.Length && jpeg[pos] == JpegMarker.Prefix)
                     pos++; // fill bytes
                 if (pos >= jpeg.Length)
-                    throw new InvalidDataException("JPEG has no scan.");
+                    throw new InvalidDataException("Truncated JPEG marker.");
 
+                int prefixCount = pos - start;
                 byte marker = jpeg[pos++];
-                if (marker == JpegMarker.Sos || marker == JpegMarker.Eoi || IsStandalone(marker))
-                    return jpeg.AsSpan(start).ToArray();
+                if (inScan && (marker == 0 || JpegMarker.IsRestart(marker) || marker == 0x01))
+                {
+                    if (marker == 0 && prefixCount != 1)
+                        throw new InvalidDataException("Invalid JPEG byte stuffing after marker fill bytes.");
+                    continue;
+                }
+                if (marker == JpegMarker.Eoi)
+                {
+                    if (tailStart < 0 || pos != jpeg.Length)
+                        throw new InvalidDataException("JPEG must end with EOI after a scan, without trailing bytes.");
+                    return jpeg.AsSpan(tailStart).ToArray();
+                }
+                if (marker == JpegMarker.Soi || JpegMarker.IsRestart(marker) || (marker < 0xC0 && marker != 0x01))
+                    throw new InvalidDataException("Unexpected JPEG marker outside scan data.");
+                if (marker == 0x01)
+                {
+                    if (tailStart < 0)
+                        AddHeaderSegment(marker, Array.Empty<byte>(), prefixCount);
+                    continue;
+                }
 
-                if (pos + 2 > jpeg.Length)
+                if (jpeg.Length - pos < 2)
                     throw new InvalidDataException("Truncated JPEG segment.");
                 int length = (jpeg[pos] << 8) | jpeg[pos + 1];
-                if (length < 2 || pos + length > jpeg.Length)
+                if (length < 2 || length > jpeg.Length - pos)
                     throw new InvalidDataException("Corrupt JPEG segment length.");
 
-                _segments.Add(new JpegSegment(marker, jpeg.AsSpan(pos + 2, length - 2).ToArray()));
+                var body = jpeg.AsSpan(pos + 2, length - 2);
+                if (IsFrame(marker))
+                {
+                    if (body.Length < 6 || body[5] == 0 || body.Length != 6 + 3 * body[5] ||
+                        (body[3] == 0 && body[4] == 0))
+                        throw new InvalidDataException("Invalid JPEG frame header length or dimensions.");
+                    hasFrame = true;
+                }
+                if (marker == JpegMarker.Sos)
+                {
+                    if (!hasFrame || body.Length < 4 || body[0] is < 1 or > 4 || body.Length != 4 + 2 * body[0])
+                        throw new InvalidDataException("Invalid JPEG scan header or missing frame.");
+                    if (tailStart < 0)
+                        tailStart = start;
+                    inScan = true;
+                }
+                else if (marker == 0xDC) // DNL may interrupt entropy data, which resumes after it.
+                {
+                    if (!inScan || body.Length != 2 || (body[0] == 0 && body[1] == 0))
+                        throw new InvalidDataException("Invalid JPEG DNL segment.");
+                }
+                else
+                {
+                    inScan = false;
+                    if (tailStart < 0)
+                        AddHeaderSegment(marker, body.ToArray(), prefixCount);
+                }
                 pos += length;
             }
         }
 
-        private static bool IsStandalone(byte marker)
+        private void AddHeaderSegment(byte marker, byte[] body, int prefixCount)
         {
-            return marker == 0x01 || JpegMarker.IsRestart(marker) || marker == JpegMarker.Soi;
+            var segment = new JpegSegment(marker, body);
+            _segments.Add(segment);
+            if (prefixCount > 1)
+                _prefixCounts.Add(segment, prefixCount);
         }
+
+        private static bool IsFrame(byte marker) => marker is >= 0xC0 and <= 0xCF && marker is not (0xC4 or 0xC8 or 0xCC);
 
         private bool IsMine(JpegSegment segment)
         {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 using SteganoLib.Algorithms;
 
@@ -11,6 +12,8 @@ namespace SteganoLib.Metadata
     /// size and concatenated back on extraction. Not steganography against an examiner
     /// who inspects the file structure; pair it with <see cref="StegoPipeline{TCarrier}"/>
     /// so the entries at least carry nothing but ciphertext.
+    /// Entries have no sequence numbers or integrity checks; use an authenticated pipeline
+    /// to detect missing, reordered or modified payload bytes.
     /// </summary>
     public sealed class MetadataCoding : IStegAlgorithm<MetadataCarrier>
     {
@@ -41,8 +44,12 @@ namespace SteganoLib.Metadata
             var entries = new List<byte[]>();
             if (data.Length == 0)
                 entries.Add(Array.Empty<byte>());
-            for (int offset = 0; offset < data.Length; offset += entrySize)
-                entries.Add(data.AsSpan(offset, Math.Min(entrySize, data.Length - offset)).ToArray());
+            for (int offset = 0; offset < data.Length;)
+            {
+                int length = Math.Min(entrySize, data.Length - offset);
+                entries.Add(data.AsSpan(offset, length).ToArray());
+                offset += length;
+            }
 
             carrier.Store.WriteEntries(entries);
         }
@@ -51,12 +58,20 @@ namespace SteganoLib.Metadata
         {
             if (carrier == null) throw new ArgumentNullException(nameof(carrier));
 
-            var entries = carrier.Store.ReadEntries();
+            var store = carrier.Store;
+            ValidateLimits(store);
+            var entries = store.ReadEntries() ?? throw new InvalidDataException("Metadata store returned a null entry list.");
             long total = 0;
             foreach (var entry in entries)
+            {
+                if (entry == null || entry.Length > store.MaxEntrySize)
+                    throw new InvalidDataException("Metadata store returned a null or oversized entry.");
                 total += entry.Length;
-            if (total > int.MaxValue)
-                throw new InvalidOperationException("Stored payload exceeds 2 GB.");
+                if (total > store.MaxTotalSize)
+                    throw new InvalidDataException("Stored payload exceeds the container limit.");
+                if (total > Array.MaxLength)
+                    throw new InvalidOperationException("Stored payload exceeds the maximum byte array length.");
+            }
 
             var data = new byte[total];
             int offset = 0;
@@ -73,7 +88,14 @@ namespace SteganoLib.Metadata
             if (carrier == null) throw new ArgumentNullException(nameof(carrier));
 
             var store = carrier.Store;
+            ValidateLimits(store);
             return Math.Min(store.MaxTotalSize, (long)store.MaxEntrySize * MaxEntries);
+        }
+
+        private static void ValidateLimits(IMetadataStore store)
+        {
+            if (store.MaxEntrySize < 0 || store.MaxTotalSize < 0)
+                throw new InvalidOperationException("Metadata store size limits must not be negative.");
         }
 
         /// <summary>Delete every entry, leaving the container as if nothing had been embedded.</summary>

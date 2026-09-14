@@ -27,10 +27,11 @@ namespace SteganoLib.Metadata
 
         private static readonly byte[] Signature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
         private static readonly Encoding Latin1 = Encoding.Latin1;
+        private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         private readonly List<PngChunk> _chunks;
 
-        /// <exception cref="InvalidDataException">Not a PNG, or a chunk is truncated or fails its CRC.</exception>
+        /// <exception cref="InvalidDataException">Invalid PNG framing, image header, text structure or chunk CRC.</exception>
         public PngMetadataStore(byte[] png, string chunkType = DefaultChunkType, string keyword = DefaultKeyword)
         {
             if (png == null) throw new ArgumentNullException(nameof(png));
@@ -129,9 +130,11 @@ namespace SteganoLib.Metadata
 
             var chunks = new List<PngChunk>();
             int pos = Signature.Length;
+            bool hasPalette = false, hasData = false, dataEnded = false;
+            byte depth = 0, color = 0;
             while (true)
             {
-                if (pos + 12 > png.Length)
+                if (png.Length - pos < 12)
                     throw new InvalidDataException("Truncated PNG chunk.");
 
                 uint length = BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(pos));
@@ -144,6 +147,52 @@ namespace SteganoLib.Metadata
                 if (crc != Crc32.Compute(png.AsSpan(pos + 4, 4 + size)))
                     throw new InvalidDataException($"CRC mismatch in PNG chunk {type}.");
 
+                if (!AllAsciiLetters(type))
+                    throw new InvalidDataException("PNG chunk types must contain four ASCII letters.");
+                if (chunks.Count == 0 && type != "IHDR")
+                    throw new InvalidDataException("PNG does not start with IHDR.");
+
+                var body = png.AsSpan(pos + 8, size);
+                switch (type)
+                {
+                    case "IHDR":
+                        if (chunks.Count != 0 || size != 13)
+                            throw new InvalidDataException("PNG must have one 13-byte IHDR at the start.");
+                        depth = body[8];
+                        color = body[9];
+                        bool validDepth = color switch
+                        {
+                            0 => depth is 1 or 2 or 4 or 8 or 16,
+                            2 or 4 or 6 => depth is 8 or 16,
+                            3 => depth is 1 or 2 or 4 or 8,
+                            _ => false,
+                        };
+                        if (BinaryPrimitives.ReadInt32BigEndian(body) <= 0 ||
+                            BinaryPrimitives.ReadInt32BigEndian(body.Slice(4)) <= 0 ||
+                            !validDepth || body[10] != 0 || body[11] != 0 || body[12] > 1)
+                            throw new InvalidDataException("Invalid PNG IHDR fields.");
+                        break;
+                    case "PLTE":
+                        if (hasPalette || hasData || color is 0 or 4 || size == 0 || size > 768 || size % 3 != 0 ||
+                            (color == 3 && size / 3 > (1 << depth)))
+                            throw new InvalidDataException("Invalid PNG palette or palette order.");
+                        hasPalette = true;
+                        break;
+                    case "IDAT":
+                        if (dataEnded || (color == 3 && !hasPalette))
+                            throw new InvalidDataException("PNG IDAT chunks must be consecutive and follow the required palette.");
+                        hasData = true;
+                        break;
+                    case "IEND":
+                        if (size != 0 || !hasData || png.Length - pos != 12)
+                            throw new InvalidDataException("PNG must end with an empty IEND after image data, without trailing bytes.");
+                        break;
+                }
+                if (hasData && type != "IDAT")
+                    dataEnded = true;
+                if (IsTextType(type))
+                    ValidateText(type, body);
+
                 chunks.Add(new PngChunk(type, png.AsSpan(pos + 8, size).ToArray()));
                 pos += 12 + size;
 
@@ -151,10 +200,85 @@ namespace SteganoLib.Metadata
                     break;
             }
 
-            if (chunks[0].Type != "IHDR")
-                throw new InvalidDataException("PNG does not start with IHDR.");
-
             return chunks;
+        }
+
+        // Checks text framing without inflating unrelated metadata. Returns the text offset.
+        private static int ValidateText(string type, ReadOnlySpan<byte> body)
+        {
+            int keywordEnd = body.IndexOf((byte)0);
+            if (keywordEnd is < 1 or > 79)
+                throw new InvalidDataException("PNG text requires a 1-to-79-byte keyword followed by a NUL separator.");
+            try
+            {
+                ValidateKeyword(Latin1.GetString(body.Slice(0, keywordEnd)));
+            }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidDataException("Invalid PNG text keyword.", ex);
+            }
+
+            int pos = keywordEnd + 1;
+            if (type == CompressedText)
+            {
+                if (body.Length - pos < 1 || body[pos] != 0)
+                    throw new InvalidDataException("Invalid PNG text compression method.");
+                return pos + 1;
+            }
+            if (type == InternationalText)
+            {
+                if (body.Length - pos < 2 || body[pos] > 1 || body[pos + 1] != 0)
+                    throw new InvalidDataException("Invalid PNG international text compression fields.");
+                bool compressed = body[pos] == 1;
+                pos += 2;
+                int languageEnd = body.Slice(pos).IndexOf((byte)0);
+                if (languageEnd < 0)
+                    throw new InvalidDataException("PNG international text has no language separator.");
+                foreach (byte c in body.Slice(pos, languageEnd))
+                {
+                    if (!(c is >= (byte)'A' and <= (byte)'Z' or >= (byte)'a' and <= (byte)'z' or >= (byte)'0' and <= (byte)'9' or (byte)'-'))
+                        throw new InvalidDataException("PNG language tags must contain ASCII letters, digits or hyphens.");
+                }
+                pos += languageEnd + 1;
+                int translatedEnd = body.Slice(pos).IndexOf((byte)0);
+                if (translatedEnd < 0)
+                    throw new InvalidDataException("PNG international text has no translated keyword separator.");
+                ValidateUtf8(body.Slice(pos, translatedEnd));
+                pos += translatedEnd + 1;
+                if (!compressed)
+                    ValidateTextData(type, body.Slice(pos));
+            }
+            else
+            {
+                ValidateTextData(type, body.Slice(pos));
+            }
+            return pos;
+        }
+
+        private static void ValidateUtf8(ReadOnlySpan<byte> data)
+        {
+            try
+            {
+                StrictUtf8.GetCharCount(data);
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new InvalidDataException("Invalid UTF-8 in PNG international text.", ex);
+            }
+        }
+
+        private static void ValidateTextData(string type, ReadOnlySpan<byte> data)
+        {
+            if (data.Contains((byte)0))
+                throw new InvalidDataException("PNG text must not contain NUL characters.");
+            if (type == InternationalText)
+                ValidateUtf8(data);
+        }
+
+        private static string DecodeText(string type, ReadOnlySpan<byte> data)
+        {
+            ValidateTextData(type, data);
+            return type == InternationalText ? StrictUtf8.GetString(data) : Latin1.GetString(data);
         }
 
         private bool IsMine(PngChunk chunk)
@@ -203,44 +327,16 @@ namespace SteganoLib.Metadata
             if (!IsTextChunk)
                 return chunk.Data;
 
-            var body = chunk.Data.AsSpan(Array.IndexOf(chunk.Data, (byte)0) + 1);
+            int offset = ValidateText(chunk.Type, chunk.Data);
+            var body = chunk.Data.AsSpan(offset);
+            bool compressed = chunk.Type == CompressedText ||
+                (chunk.Type == InternationalText && chunk.Data[Array.IndexOf(chunk.Data, (byte)0) + 1] == 1);
+            string text = DecodeText(chunk.Type, compressed ? Inflate(body) : body);
             try
             {
-                string text;
-                switch (ChunkType)
-                {
-                    case Text:
-                        text = Latin1.GetString(body);
-                        break;
-                    case CompressedText:
-                        if (body.Length < 1 || body[0] != 0)
-                            return null;
-                        text = Latin1.GetString(Inflate(body.Slice(1)));
-                        break;
-                    default:
-                        if (body.Length < 2 || body[1] != 0)
-                            return null;
-                        bool compressed = body[0] == 1;
-                        int pos = 2;
-                        int languageEnd = body.Slice(pos).IndexOf((byte)0);
-                        if (languageEnd < 0)
-                            return null;
-                        pos += languageEnd + 1;
-                        int translatedEnd = body.Slice(pos).IndexOf((byte)0);
-                        if (translatedEnd < 0)
-                            return null;
-                        pos += translatedEnd + 1;
-                        var utf8 = body.Slice(pos);
-                        text = Encoding.UTF8.GetString(compressed ? Inflate(utf8) : utf8.ToArray());
-                        break;
-                }
                 return Convert.FromBase64String(text);
             }
             catch (FormatException)
-            {
-                return null;
-            }
-            catch (InvalidDataException)
             {
                 return null;
             }
@@ -256,11 +352,24 @@ namespace SteganoLib.Metadata
 
         private static byte[] Inflate(ReadOnlySpan<byte> data)
         {
+            if (data.Length < 8) // zlib header, at least one deflate block, Adler-32 trailer
+                throw new InvalidDataException("Truncated PNG compressed text.");
             using var input = new MemoryStream(data.ToArray());
             using var zlib = new ZLibStream(input, CompressionMode.Decompress);
             using var output = new MemoryStream();
             zlib.CopyTo(output);
-            return output.ToArray();
+            byte[] text = output.ToArray();
+            // ZLibStream can accept EOF before the trailer. Check the required Adler-32
+            // trailer explicitly so truncated text is not returned as a partial entry.
+            uint a = 1, b = 0;
+            foreach (byte value in text)
+            {
+                a = (a + value) % 65521;
+                b = (b + a) % 65521;
+            }
+            if (BinaryPrimitives.ReadUInt32BigEndian(data.Slice(data.Length - 4)) != ((b << 16) | a))
+                throw new InvalidDataException("Invalid or missing PNG compressed text checksum.");
+            return text;
         }
 
         private static bool IsTextType(string type) => type is Text or CompressedText or InternationalText;
@@ -300,6 +409,8 @@ namespace SteganoLib.Metadata
                 throw new ArgumentException("Keyword must be 1 to 79 characters.", nameof(keyword));
             if (keyword[0] == ' ' || keyword[^1] == ' ')
                 throw new ArgumentException("Keyword must not start or end with a space.", nameof(keyword));
+            if (keyword.Contains("  ", StringComparison.Ordinal))
+                throw new ArgumentException("Keyword must not contain consecutive spaces.", nameof(keyword));
             foreach (char c in keyword)
             {
                 if (!(c >= 32 && c <= 126) && !(c >= 161 && c <= 255))

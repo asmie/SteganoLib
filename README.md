@@ -79,6 +79,14 @@ PCM loading also requires consistent byte rate and sample alignment, a single fo
 
 AVI loading validates dimensions, bitmap headers, frame timing and RGB frame sizes. MJPEG content and dimensions are checked when decoding each frame. Record lists are traversed iteratively. Multiple video streams, zero-length dropped frames, movie lists other than `rec `, and OpenDML extensions are explicitly unsupported.
 
+## Metadata input validation
+
+PNG metadata loading validates chunk boundaries, CRCs, the image header, palette placement, consecutive image-data chunks and the final empty `IEND`, following the [PNG specification](https://www.w3.org/TR/png-3/). Text chunks require valid keyword and compression fields, separators and UTF-8 where applicable. Extracting matching compressed text checks its checksum; malformed text raises `InvalidDataException` instead of silently yielding a partial payload. Well-formed text that is not Base64 remains ordinary metadata and is ignored during extraction.
+
+JPEG metadata loading checks marker and segment boundaries through `EOI`, including later scans, while preserving scan bytes and marker fill bytes. Progressive JPEG remains supported. Both metadata readers reject trailing bytes after the end marker. These checks cover container structure; they do not decode PNG image data or JPEG entropy codes to validate pixels. Unrelated compressed text is preserved without decompression, and configurable decompression limits are not yet available.
+
+Metadata payloads retain their existing format: entries are concatenated in file order, with no part identifiers or integrity checks. Use an authenticated `StegoPipeline` to detect payload damage. `MetadataCoding.MaxEntries` limits writing, not extraction; extraction checks store limits and the maximum byte-array length before assembling the payload. JPEG payload entries are read and replaced only before the first scan.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with
