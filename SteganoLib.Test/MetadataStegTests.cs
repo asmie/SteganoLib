@@ -37,12 +37,27 @@ namespace SteganoLib.Test
             return stream.ToArray();
         }
 
-        private static byte[] SampleJpeg(bool progressive = false)
+        private static byte[] SampleJpeg()
         {
             using var picture = JpegImageTests.TestPicture(48, 40, 4);
             using var stream = new MemoryStream();
-            picture.SaveAsJpeg(stream, new JpegEncoder { Quality = 80, Progressive = progressive });
+            picture.SaveAsJpeg(stream, new SixLabors.ImageSharp.Formats.Jpeg.JpegEncoder { Quality = 80 });
             return stream.ToArray();
+        }
+
+        /// <summary>A baseline file whose frame marker is rewritten to SOF2, as a progressive JPEG would carry.</summary>
+        private static byte[] ProgressiveHeaderJpeg()
+        {
+            var jpeg = SampleJpeg();
+            for (int i = 2; i < jpeg.Length - 1; i++)
+            {
+                if (jpeg[i] == 0xFF && jpeg[i + 1] == 0xC0)
+                {
+                    jpeg[i + 1] = 0xC2;
+                    return jpeg;
+                }
+            }
+            throw new InvalidOperationException("No SOF0 marker found.");
         }
 
         private static byte[] SampleWav() => PcmAudioTests.Synthetic(2000, 2, 16).ToArray();
@@ -71,6 +86,25 @@ namespace SteganoLib.Test
             var bytes = stream.ToArray();
             BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4), bytes.Length - 8);
             return bytes;
+        }
+
+        /// <summary>Insert a hand-built tEXt chunk before IEND.</summary>
+        private static byte[] InsertTextChunk(byte[] png, string keyword, string text)
+        {
+            var body = Encoding.Latin1.GetBytes(keyword + "\0" + text);
+            var type = Encoding.ASCII.GetBytes("tEXt");
+            using var stream = new MemoryStream();
+            stream.Write(png, 0, png.Length - 12);
+            var length = new byte[4];
+            BinaryPrimitives.WriteInt32BigEndian(length, body.Length);
+            stream.Write(length);
+            stream.Write(type);
+            stream.Write(body);
+            var crc = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(crc, Crc32.Compute(type, body));
+            stream.Write(crc);
+            stream.Write(png, png.Length - 12, 12);
+            return stream.ToArray();
         }
 
         private static byte[] Sample(string format) => format switch
@@ -288,15 +322,10 @@ namespace SteganoLib.Test
         [Fact]
         public void Png_TextMode_LeavesOtherKeywordsAlone()
         {
-            byte[] cover;
-            using (var picture = JpegImageTests.TestPicture(16, 16, 8))
-            {
-                picture.Metadata.GetPngMetadata().TextData.Add(new PngTextData("Author", "someone", string.Empty, string.Empty));
-                picture.Metadata.GetPngMetadata().TextData.Add(new PngTextData("Comment", "not base64!", string.Empty, string.Empty));
-                using var stream = new MemoryStream();
-                picture.SaveAsPng(stream);
-                cover = stream.ToArray();
-            }
+            // A cover that already carries two tEXt chunks: a foreign keyword and our keyword with plain text.
+            var cover = SamplePng(16, 16);
+            cover = InsertTextChunk(cover, "Author", "someone");
+            cover = InsertTextChunk(cover, "Comment", "not base64!");
             var options = new MetadataOptions { PngChunkType = "tEXt" };
             var coder = new MetadataCoding();
 
@@ -360,12 +389,27 @@ namespace SteganoLib.Test
 
         // ---------- JPEG ----------
 
-        [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public void Jpeg_DecodesPixelIdentical_SegmentAfterApp0(bool progressive)
+        [Fact]
+        public void Jpeg_ProgressiveHeader_HandledVerbatim()
         {
-            var cover = SampleJpeg(progressive);
+            var cover = ProgressiveHeaderJpeg();
+            var data = Random(321, 18);
+            var coder = new MetadataCoding();
+
+            Assert.Throws<NotSupportedException>(() => JpegImage.Load(cover));
+
+            var stego = coder.Embed(data, cover);
+
+            Assert.Equal(data, coder.ExtractFromBytes(stego));
+            var carrier = MetadataCarrier.Load(stego);
+            coder.Remove(carrier);
+            Assert.Equal(cover, carrier.ToArray());
+        }
+
+        [Fact]
+        public void Jpeg_DecodesPixelIdentical_SegmentAfterApp0()
+        {
+            var cover = SampleJpeg();
             var data = Random(1234, 10);
 
             var stego = new MetadataCoding().Embed(data, cover);
@@ -414,7 +458,7 @@ namespace SteganoLib.Test
         [Fact]
         public void Jpeg_Capacity_BoundedByMaxEntries()
         {
-            var coder = new MetadataCoding { MaxEntries = 2 };
+            IStegAlgorithm<MetadataCarrier> coder = new MetadataCoding { MaxEntries = 2 };
             var carrier = MetadataCarrier.Load(SampleJpeg());
             long capacity = coder.Capacity(carrier);
 
