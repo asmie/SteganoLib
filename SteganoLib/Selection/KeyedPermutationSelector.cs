@@ -26,12 +26,18 @@ namespace SteganoLib.Selection
 
         public IEnumerable<Point> Pixels(int width, int height)
         {
+            return Enumerate(width, Count(width, height));
+        }
+
+        /// <summary>Every pixel is selected; no traversal is needed to count them.</summary>
+        public long Count(int width, int height)
+        {
             if (width < 1)
                 throw new ArgumentOutOfRangeException(nameof(width));
             if (height < 1)
                 throw new ArgumentOutOfRangeException(nameof(height));
 
-            return Enumerate(width, (long)width * height);
+            return (long)width * height;
         }
 
         private IEnumerable<Point> Enumerate(int width, long count)

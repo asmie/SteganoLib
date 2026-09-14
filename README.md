@@ -61,6 +61,10 @@ With `PayloadEnvelope.Compress = true` (CLI: `--compress`), embedding checks the
 
 For phase coding, recordings shorter than 64 samples per channel, or shorter than the configured `SegmentLength`, have zero capacity. A segment of 64 samples cannot hold the length header either. On these carriers, raw extraction returns an empty array and embedding an empty raw payload leaves the audio unchanged; nonempty payloads and authenticated envelopes are rejected.
 
+Custom pixel and sample selectors may return subsets. Their sequences must be finite, repeatable, in bounds and free of duplicates. `Count` must match the sequence length; its default implementation enumerates the selection, while built-in keyed selectors count without traversal. Content-aware pixel selectors use the image-based `Pixels` and `Count` overloads. Adaptive selectors can wrap other content-aware selectors and preserve the strictest required high bits; their own variance score always uses six-bit grey levels.
+
+Trellis capacity is a length budget, not a promise that every payload can be embedded under the configured costs. Positive infinity forbids a payload change, and infeasible embedding throws `CapacityExceededException` even when `Required <= Available`. The plain algorithm header ignores cost models. F5 additionally forbids changes to magnitude-one payload coefficients because shrinking them would break extraction; this restriction applies to custom cost models too. F5's default matrix mode can fall back to one bit per coefficient to fit its conservative budget. These changes retain the existing header format, although new F5 trellis embeddings may choose a different width.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

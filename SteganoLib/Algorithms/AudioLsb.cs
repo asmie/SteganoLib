@@ -46,13 +46,24 @@ namespace SteganoLib.Algorithms
             return SlotEmbedding.Extract(new Carrier(this, audio));
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Length budget from the selected samples, after the header. Trellis embedding
+        /// may reject a payload within this budget when changes are forbidden.
+        /// </summary>
         public long Capacity(PcmAudio audio)
         {
             if (audio == null)
                 throw new ArgumentNullException(nameof(audio));
 
-            return SlotEmbedding.Capacity((long)audio.Samples.Length * _bitsPerSample);
+            return SlotEmbedding.Capacity(TotalSlots(audio));
+        }
+
+        private long TotalSlots(PcmAudio audio)
+        {
+            long count = _selector.Count(audio.Samples.Length);
+            if (count < 0 || count > audio.Samples.Length)
+                throw new InvalidOperationException("The selector count must be between zero and the audio's sample count.");
+            return count * _bitsPerSample;
         }
 
         /// <summary>Low bits used in each sample, 1 to 4. Default 1.</summary>
@@ -102,7 +113,7 @@ namespace SteganoLib.Algorithms
                 _audio = audio;
             }
 
-            public override long TotalSlots() => (long)_audio.Samples.Length * _owner._bitsPerSample;
+            public override long TotalSlots() => _owner.TotalSlots(_audio);
 
             public override IEnumerable<(long Index, int Bit)> Slots()
             {

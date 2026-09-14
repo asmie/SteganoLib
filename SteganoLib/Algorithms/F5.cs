@@ -181,9 +181,10 @@ namespace SteganoLib.Algorithms
         }
 
         /// <summary>
-        /// Guaranteed capacity: every non-zero AC coefficient carries a bit, and only
-        /// coefficients of magnitude one can be lost to shrinkage. Matrix encoding
-        /// does not raise this bound, it only reduces the number of changes.
+        /// Conservative length budget: reserves the header and excludes coefficients
+        /// of magnitude one, which can be lost to shrinkage. Matrix encoding falls back
+        /// to one bit per coefficient to fit this budget. Trellis embedding can still
+        /// fail within the budget because feasibility depends on the message and costs.
         /// </summary>
         public long Capacity(JpegImage image)
         {
@@ -233,8 +234,11 @@ namespace SteganoLib.Algorithms
         {
             long messageBits = (long)data.Length * 8;
 
-            // The header takes at most one coefficient per bit plus one per shrunk one.
-            long available = CountNonZero(work).NonZero - 2 * HeaderBits;
+            // Each header bit consumes one surviving coefficient, but it may first
+            // shrink any number of magnitude-one coefficients. Reserve all possible
+            // shrinkage, while avoiding a second header reservation on covers without ones.
+            var (nonZero, ones) = CountNonZero(work);
+            long available = nonZero - ones - HeaderBits;
             int width = messageBits == 0 ? 1 : (int)Math.Min(_maxTrellisWidth, available / Math.Max(1, messageBits));
             if (width < 1)
                 return false;
@@ -253,7 +257,12 @@ namespace SteganoLib.Algorithms
                     return false;
                 positions[i] = refs.Current;
                 cover[i] = Bit(positions[i].Array[positions[i].Index]);
-                costs[i] = _costModel.Cost(positions[i].Array[positions[i].Index], positions[i].Index % 64);
+                short value = positions[i].Array[positions[i].Index];
+                // Shrinkage would remove this position from the receiver's sequence,
+                // so magnitude-one coefficients are forbidden regardless of custom costs.
+                costs[i] = value == 1 || value == -1
+                    ? double.PositiveInfinity
+                    : _costModel.Cost(value, positions[i].Index % 64);
             }
 
             var message = new bool[messageBits];
@@ -272,7 +281,7 @@ namespace SteganoLib.Algorithms
                 var (array, index) = positions[i];
                 array[index] = StepTowardZero(array[index]);
                 if (array[index] == 0)
-                    return false; // the cost model allowed a magnitude-one change; the receiver would lose this coefficient
+                    return false; // Defensive check: shrinkage would change the receiver's traversal.
             }
 
             return true;

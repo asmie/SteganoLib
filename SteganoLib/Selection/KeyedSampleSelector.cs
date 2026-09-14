@@ -22,10 +22,16 @@ namespace SteganoLib.Selection
 
         public IEnumerable<long> Indices(long count)
         {
+            return Enumerate(Count(count));
+        }
+
+        /// <summary>Every sample is selected; no traversal is needed to count them.</summary>
+        public long Count(long count)
+        {
             if (count < 0)
                 throw new ArgumentOutOfRangeException(nameof(count));
 
-            return Enumerate(count);
+            return count;
         }
 
         private IEnumerable<long> Enumerate(long count)

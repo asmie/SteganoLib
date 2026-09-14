@@ -36,10 +36,7 @@ namespace SteganoLib.Selection
         /// <exception cref="InvalidOperationException">The generators stop making progress.</exception>
         public IEnumerable<Point> Pixels(int width, int height)
         {
-            if (width < 1)
-                throw new ArgumentOutOfRangeException(nameof(width));
-            if (height < 1)
-                throw new ArgumentOutOfRangeException(nameof(height));
+            Count(width, height);
 
             var rows = new PRNG { Name = _prngName };
             rows.Initialize(_rowSeed);
@@ -47,6 +44,20 @@ namespace SteganoLib.Selection
             columns.Initialize(_columnSeed);
 
             return Enumerate(rows, columns, width, height);
+        }
+
+        /// <summary>
+        /// Intended full-image count. Enumeration can still throw if the legacy
+        /// generators stop making progress; counting does not consume their draws.
+        /// </summary>
+        public long Count(int width, int height)
+        {
+            if (width < 1)
+                throw new ArgumentOutOfRangeException(nameof(width));
+            if (height < 1)
+                throw new ArgumentOutOfRangeException(nameof(height));
+
+            return (long)width * height;
         }
 
         private static IEnumerable<Point> Enumerate(PRNG rows, PRNG columns, int width, int height)

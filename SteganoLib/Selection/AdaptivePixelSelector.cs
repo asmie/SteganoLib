@@ -9,9 +9,9 @@ namespace SteganoLib.Selection
     /// <summary>
     /// Skips smooth areas. Each candidate from the inner selector is scored by the
     /// variance of quantised grey levels in its 3x3 neighbourhood; only pixels at or
-    /// above <see cref="MinVariance"/> are used. Grey levels use the top
-    /// <see cref="StableHighBits"/> bits, so the score does not change when the
-    /// algorithm embeds.
+    /// above <see cref="MinVariance"/> are used. Grey levels use the top six bits,
+    /// so the score does not change when the algorithm embeds. Content-aware inner
+    /// selectors receive the image; their stable-bit requirements are preserved too.
     /// </summary>
     public sealed class AdaptivePixelSelector : IContentAwarePixelSelector
     {
@@ -39,7 +39,16 @@ namespace SteganoLib.Selection
             }
         }
 
-        public int StableHighBits => 6;
+        public int StableHighBits
+        {
+            get
+            {
+                int innerBits = _inner is IContentAwarePixelSelector aware ? aware.StableHighBits : 1;
+                if (innerBits < 1 || innerBits > 7)
+                    throw new InvalidOperationException("StableHighBits must be between 1 and 7.");
+                return Math.Max(6, innerBits);
+            }
+        }
 
         public IPixelSelector Inner => _inner;
 
@@ -68,7 +77,10 @@ namespace SteganoLib.Selection
 
         private IEnumerable<Point> Filter(Image<Rgba32> image)
         {
-            foreach (var p in _inner.Pixels(image.Width, image.Height))
+            var candidates = _inner is IContentAwarePixelSelector aware
+                ? aware.Pixels(image)
+                : _inner.Pixels(image.Width, image.Height);
+            foreach (var p in candidates)
             {
                 if (Variance(image, p.X, p.Y) >= _minVariance)
                     yield return p;
@@ -77,7 +89,7 @@ namespace SteganoLib.Selection
 
         private double Variance(Image<Rgba32> image, int x, int y)
         {
-            int shift = 8 - StableHighBits;
+            const int shift = 2; // The score always uses six bits, even if the inner selector needs seven.
             int x0 = Math.Max(0, x - 1), x1 = Math.Min(image.Width - 1, x + 1);
             int y0 = Math.Max(0, y - 1), y1 = Math.Min(image.Height - 1, y + 1);
 

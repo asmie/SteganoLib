@@ -32,19 +32,15 @@ namespace SteganoLib.Coding
 
         /// <summary>
         /// Find stego bits carrying <paramref name="message"/>. Cover length must be a
-        /// multiple of message length. Returns the total cost, or infinity when every
-        /// solution needs a change to an element with infinite cost.
+        /// multiple of message length. Returns the total cost, or infinity when no
+        /// solution has a total cost representable as a finite double. On failure the
+        /// stego buffer is unchanged. Buffer and cost validation also applies to empty messages.
         /// </summary>
         public double Embed(ReadOnlySpan<bool> cover, ReadOnlySpan<double> costs, ReadOnlySpan<bool> message, Span<bool> stego)
         {
             int n = cover.Length;
             int m = message.Length;
-            if (m == 0)
-            {
-                cover.CopyTo(stego);
-                return 0;
-            }
-            if (n < m || n % m != 0)
+            if (m != 0 && (n < m || n % m != 0))
                 throw new ArgumentException("Cover length must be a positive multiple of the message length.", nameof(cover));
             if (costs.Length != n)
                 throw new ArgumentException("One cost per cover bit is required.", nameof(costs));
@@ -54,6 +50,12 @@ namespace SteganoLib.Coding
             {
                 if (costs[i] < 0 || double.IsNaN(costs[i]))
                     throw new ArgumentException("Costs must be non-negative.", nameof(costs));
+            }
+
+            if (m == 0)
+            {
+                cover.CopyTo(stego);
+                return 0;
             }
 
             int w = n / m;

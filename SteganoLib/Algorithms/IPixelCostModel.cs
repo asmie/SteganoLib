@@ -6,7 +6,8 @@ namespace SteganoLib.Algorithms
     /// <summary>
     /// Price of changing one channel of one pixel by one step. Used by the
     /// syndrome-trellis coder to choose which pixels to change; the receiver never
-    /// needs it, so it may look at anything in the cover image.
+    /// needs it, so it may look at anything in the cover image. Applies to payload
+    /// slots only; the plain algorithm header does not consult the cost model.
     /// </summary>
     public interface IPixelCostModel
     {

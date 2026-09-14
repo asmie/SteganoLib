@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -15,6 +16,9 @@ namespace SteganoLib.Selection
     {
         /// <summary>Pixels of <paramref name="image"/> that may carry data, in embedding order.</summary>
         IEnumerable<Point> Pixels(Image<Rgba32> image);
+
+        /// <summary>Exact selected pixel count for this image; the default enumerates the selection.</summary>
+        long Count(Image<Rgba32> image) => Pixels(image).LongCount();
 
         /// <summary>Number of high bits per channel the algorithm must leave untouched (1 to 7).</summary>
         int StableHighBits { get; }

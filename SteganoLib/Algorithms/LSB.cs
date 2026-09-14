@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
@@ -70,7 +69,10 @@ namespace SteganoLib.Algorithms
             return SlotEmbedding.Extract(new Carrier(this, image));
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Length budget from the selected pixels and channel settings, after the header.
+        /// Trellis embedding may reject a payload within this budget when changes are forbidden.
+        /// </summary>
         public long Capacity(Image<Rgba32> image)
         {
             if (image == null)
@@ -145,8 +147,10 @@ namespace SteganoLib.Algorithms
         private long TotalSlots(Image<Rgba32> image)
         {
             long pixels = _selector is IContentAwarePixelSelector aware
-                ? aware.Pixels(image).LongCount()
-                : (long)image.Width * image.Height;
+                ? aware.Count(image)
+                : _selector.Count(image.Width, image.Height);
+            if (pixels < 0 || pixels > (long)image.Width * image.Height)
+                throw new InvalidOperationException("The selector count must be between zero and the image's pixel count.");
             int channels = ChannelCount;
             int perPixel = Math.Min(_bitsPerPixel, channels);
 
