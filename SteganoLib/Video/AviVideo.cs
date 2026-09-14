@@ -244,8 +244,9 @@ namespace SteganoLib.Video
 
         public void AddFrame(byte[] data)
         {
+            var frame = ValidateFrame(data);
             _frames.Add(_movi.Count);
-            _movi.Add(($"{_videoStream:D2}{(Codec == AviCodec.Rgb ? "db" : "dc")}", ValidateFrame(data)));
+            _movi.Add(($"{_videoStream:D2}{(Codec == AviCodec.Rgb ? "db" : "dc")}", frame));
         }
 
         // ---------- RGB frames ----------

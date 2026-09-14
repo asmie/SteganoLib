@@ -43,6 +43,29 @@ namespace SteganoLib.Test
             Assert.Equal(domain, seen.Count);
         }
 
+        [Theory]
+        [InlineData((1L << 62) - 1)]
+        [InlineData(1L << 62)]
+        [InlineData((1L << 62) + 1)]
+        [InlineData(long.MaxValue)]
+        public void Permute_LargeDomainsStayInRangeAndDistinct(long domain)
+        {
+            foreach (var key in new[] { new byte[FeistelPermutation.KeySize], Key(7) })
+            {
+                var permutation = new FeistelPermutation(key, domain);
+                var indices = Enumerable.Range(0, 128).Select(i => (long)i)
+                    .Concat(new[] { domain / 2, domain / 2 + 1, domain - 2, domain - 1 });
+                var seen = new HashSet<long>();
+                foreach (long index in indices)
+                {
+                    long result = permutation.Permute(index);
+                    Assert.InRange(result, 0, domain - 1);
+                    Assert.True(seen.Add(result));
+                    Assert.Equal(result, permutation.Permute(index));
+                }
+            }
+        }
+
         [Fact]
         public void Permute_SameKey_IsDeterministic()
         {

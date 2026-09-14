@@ -28,6 +28,12 @@ namespace SteganoLib.Selection
             _columnSeed = columnSeed;
         }
 
+        /// <summary>
+        /// Enumerate the legacy draw order. Stops with an error after max(1024, 32 times
+        /// the pixel count) consecutive duplicate draws. This bounds retries when the
+        /// generators stop making progress. Prefixes retain their original order.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">The generators stop making progress.</exception>
         public IEnumerable<Point> Pixels(int width, int height)
         {
             if (width < 1)
@@ -47,12 +53,21 @@ namespace SteganoLib.Selection
         {
             long total = (long)width * height;
             var used = new HashSet<Point>();
+            long duplicateLimit = total > long.MaxValue / 32 ? long.MaxValue : Math.Max(1024, total * 32);
+            long duplicates = 0;
 
             while (used.Count < total)
             {
                 var p = new Point(columns.Next(width), rows.Next(height));
                 if (used.Add(p))
+                {
+                    duplicates = 0;
                     yield return p;
+                }
+                else if (++duplicates >= duplicateLimit)
+                {
+                    throw new InvalidOperationException("The legacy pixel generators stopped making progress. Use different seeds or a KeyedPermutationSelector for new carriers.");
+                }
             }
         }
     }

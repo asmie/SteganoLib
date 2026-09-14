@@ -125,6 +125,29 @@ namespace SteganoLib.Test
             Assert.Equal(bytes, loaded.ToArray());
         }
 
+        [Theory]
+        [InlineData(false, 0)]
+        [InlineData(false, 1)]
+        [InlineData(true, 0)]
+        [InlineData(true, 1)]
+        public void Avi_RejectedFramePreservesStateAndAllowsLaterAdd(bool mjpeg, int initialFrames)
+        {
+            var video = mjpeg ? MjpegVideo(initialFrames, 16, 16) : RgbVideo(initialFrames, 16, 16);
+            var before = video.ToArray();
+            Assert.Throws<ArgumentNullException>(() => video.AddFrame((byte[])null));
+            Assert.Equal(initialFrames, video.FrameCount);
+            Assert.Equal(before, video.ToArray());
+            Assert.Throws<ArgumentException>(() => video.AddFrame(new byte[1]));
+            Assert.Equal(initialFrames, video.FrameCount);
+            Assert.Equal(before, video.ToArray());
+
+            var source = mjpeg ? MjpegVideo(1, 16, 16) : RgbVideo(1, 16, 16);
+            video.AddFrame(source.GetFrameData(0));
+            var loaded = AviVideo.Load(video.ToArray());
+            Assert.Equal(initialFrames + 1, loaded.FrameCount);
+            Assert.Equal(source.GetFrameData(0), loaded.GetFrameData(initialFrames));
+        }
+
         [Fact]
         public void Avi_Rgb_FramesAreBottomUpBgr()
         {

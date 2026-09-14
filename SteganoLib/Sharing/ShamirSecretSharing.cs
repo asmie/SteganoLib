@@ -70,8 +70,9 @@ namespace SteganoLib.Sharing
             if (shares == null) throw new ArgumentNullException(nameof(shares));
             if (shares.Count == 0) throw new ArgumentException("At least one share is required.", nameof(shares));
 
-            int threshold = shares[0].Threshold;
-            int length = shares[0].Data.Length;
+            var first = shares[0] ?? throw new ArgumentException("Shares must not be null.", nameof(shares));
+            int threshold = first.Threshold;
+            int length = first.Data.Length;
             var seen = new HashSet<int>();
             foreach (var share in shares)
             {

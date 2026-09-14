@@ -17,15 +17,22 @@ namespace SteganoLib.Payload
         Unsupported,
     }
 
+    /// <summary>Extraction outcome. A default value represents <see cref="ExtractionStatus.NotFound"/>.</summary>
     public readonly struct ExtractResult
     {
         private ExtractResult(ExtractionStatus status, byte[] data)
         {
-            Status = status;
+            _status = status;
             Data = data;
         }
 
-        public ExtractionStatus Status { get; }
+        private readonly ExtractionStatus _status;
+
+        // Keep the published enum values, including Success = 0, while making a
+        // zero-initialized struct a failure. Explicit successes always have data.
+        public ExtractionStatus Status => _status == ExtractionStatus.Success && Data == null
+            ? ExtractionStatus.NotFound
+            : _status;
 
         /// <summary>Recovered bytes on <see cref="ExtractionStatus.Success"/>, otherwise <c>null</c>.</summary>
         public byte[] Data { get; }

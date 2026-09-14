@@ -17,7 +17,7 @@ namespace SteganoLib.Crypto
         private readonly ulong _halfMask;
         private readonly long _domain;
 
-        /// <param name="key">At least 16 bytes. Round keys are sliced from it, so pass HKDF output rather than a raw passphrase.</param>
+        /// <param name="key">At least <see cref="KeySize"/> bytes. Round keys are sliced from it, so pass HKDF output rather than a raw passphrase.</param>
         /// <param name="domain">Number of elements to permute. Must be positive.</param>
         public FeistelPermutation(ReadOnlySpan<byte> key, long domain)
         {
@@ -56,7 +56,7 @@ namespace SteganoLib.Crypto
             do
             {
                 x = Encrypt(x);
-            } while ((long)x >= _domain);
+            } while (x >= (ulong)_domain);
 
             return (long)x;
         }

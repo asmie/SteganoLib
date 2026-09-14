@@ -100,6 +100,18 @@ namespace SteganoLib.Test
             Assert.NotEqual(Random(8, 2), ShamirSecretSharing.Combine(new[] { a[0], other[1] }));
         }
 
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        public void Shamir_NullShareIsRejectedAtAnyPosition(int position)
+        {
+            var shares = new ShamirSecretSharing(2, 2).Split(new byte[] { 1, 2 }).ToArray();
+            shares[position] = null;
+            var error = Assert.Throws<ArgumentException>(() => ShamirSecretSharing.Combine(shares));
+            Assert.Equal("shares", error.ParamName);
+            Assert.Contains("must not be null", error.Message);
+        }
+
         [Fact]
         public void Shamir_ParameterChecks_AndEmptySecret()
         {

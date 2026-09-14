@@ -143,6 +143,34 @@ namespace SteganoLib.Test
             Assert.Throws<ArgumentException>(() => AudioMetrics.Compare(cover, PcmAudioTests.Synthetic(4000, 1, 16)));
         }
 
+        [Theory]
+        [InlineData(8, -128, 127, 255L)]
+        [InlineData(16, -32768, 32767, 65535L)]
+        [InlineData(24, -8388608, 8388607, 16777215L)]
+        [InlineData(32, int.MinValue, int.MaxValue, 4294967295L)]
+        public void Audio_ExtremeSamplesHaveExactMaximumError(int bits, int minimum, int maximum, long expected)
+        {
+            var cover = new PcmAudio(8000, 1, bits, new[] { minimum, maximum, 0 });
+            var stego = new PcmAudio(8000, 1, bits, new[] { maximum, minimum, 0 });
+            var result = AudioMetrics.Compare(cover, stego);
+            Assert.Equal(expected, result.MaxAbsoluteError);
+            Assert.Equal(2, result.ChangedSamples);
+            double signal = (double)minimum * minimum + (double)maximum * maximum;
+            double noise = 2.0 * expected * expected;
+            Assert.Equal(10 * Math.Log10(signal / noise), result.Snr, 12);
+            Assert.Equal(10 * Math.Log10((double)maximum * maximum * 3 / noise), result.Psnr, 12);
+        }
+
+        [Fact]
+        public void Audio_DifferentSampleRatesAreRejected()
+        {
+            var cover = new PcmAudio(8000, 1, 16, new[] { 1, 2, 3 });
+            var stego = new PcmAudio(16000, 1, 16, new[] { 1, 2, 3 });
+            var error = Assert.Throws<ArgumentException>(() => AudioMetrics.Compare(cover, stego));
+            Assert.Equal("stego", error.ParamName);
+            Assert.Contains("sample rate", error.Message);
+        }
+
         // ---------- reports ----------
 
         [Fact]

@@ -7,7 +7,7 @@ namespace SteganoLib.Quality
     /// <summary>How far a stego recording is from its cover.</summary>
     public sealed class AudioComparison
     {
-        internal AudioComparison(double snr, double psnr, long changedSamples, long totalSamples, int maxAbsoluteError)
+        internal AudioComparison(double snr, double psnr, long changedSamples, long totalSamples, long maxAbsoluteError)
         {
             Snr = snr;
             Psnr = psnr;
@@ -28,32 +28,34 @@ namespace SteganoLib.Quality
 
         public double ChangeRate => TotalSamples == 0 ? 0 : (double)ChangedSamples / TotalSamples;
 
-        public int MaxAbsoluteError { get; }
+        /// <summary>Largest absolute sample difference; can exceed int.MaxValue for 32-bit PCM.</summary>
+        public long MaxAbsoluteError { get; }
     }
 
-    /// <summary>Distortion measures between two PCM recordings with the same layout.</summary>
+    /// <summary>Distortion measures between PCM recordings with equal sample counts, channel counts, bit depths and sample rates.</summary>
     public static class AudioMetrics
     {
         public static AudioComparison Compare(PcmAudio cover, PcmAudio stego)
         {
             if (cover == null) throw new ArgumentNullException(nameof(cover));
             if (stego == null) throw new ArgumentNullException(nameof(stego));
-            if (cover.Samples.Length != stego.Samples.Length || cover.Channels != stego.Channels || cover.BitsPerSample != stego.BitsPerSample)
-                throw new ArgumentException("Recordings differ in length, channel count or bit depth.", nameof(stego));
+            if (cover.Samples.Length != stego.Samples.Length || cover.Channels != stego.Channels || cover.BitsPerSample != stego.BitsPerSample || cover.SampleRate != stego.SampleRate)
+                throw new ArgumentException("Recordings differ in length, channel count, bit depth or sample rate.", nameof(stego));
 
             double signal = 0, noise = 0;
             long changed = 0;
-            int maxError = 0;
+            long maxError = 0;
             for (int i = 0; i < cover.Samples.Length; i++)
             {
                 double s = cover.Samples[i];
-                double d = (double)stego.Samples[i] - s;
+                long difference = (long)stego.Samples[i] - cover.Samples[i];
+                double d = difference;
                 signal += s * s;
                 noise += d * d;
                 if (d != 0)
                 {
                     changed++;
-                    maxError = Math.Max(maxError, (int)Math.Abs(d));
+                    maxError = Math.Max(maxError, Math.Abs(difference));
                 }
             }
 
