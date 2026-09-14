@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
+using SteganoLib.Containers;
+
 namespace SteganoLib.Audio
 {
     /// <summary>
@@ -64,8 +66,8 @@ namespace SteganoLib.Audio
 
         public int Sample(int frame, int channel) => Samples[frame * Channels + channel];
 
-        /// <exception cref="NotSupportedException">Float, compressed or unusual bit depths.</exception>
-        /// <exception cref="InvalidDataException">Not a RIFF WAVE file.</exception>
+        /// <exception cref="NotSupportedException">Float, compressed or unsupported sample precision.</exception>
+        /// <exception cref="InvalidDataException">Invalid RIFF framing, PCM format fields or incomplete sample frames.</exception>
         public static PcmAudio Load(string path)
         {
             if (path == null) throw new ArgumentNullException(nameof(path));
@@ -110,48 +112,60 @@ namespace SteganoLib.Audio
 
             public static PcmAudio Read(byte[] data)
             {
-                if (data.Length < 12 || Tag(data, 0) != "RIFF" || Tag(data, 8) != "WAVE")
-                    throw new InvalidDataException("Not a RIFF WAVE file.");
-
-                int pos = 12;
+                int end = RiffReader.ContainerEnd(data, "WAVE");
                 int channels = 0, sampleRate = 0, bits = 0;
                 bool formatSeen = false;
                 byte[] pcm = null;
                 var extra = new List<RiffChunk>();
 
-                while (pos + 8 <= data.Length)
+                foreach (var (id, pos, size) in RiffReader.Chunks(data, 12, end))
                 {
-                    string id = Tag(data, pos);
-                    int size = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(pos + 4));
-                    pos += 8;
-                    if (size < 0 || pos + size > data.Length)
-                    {
-                        if (id == "data" && size < 0)
-                            throw new InvalidDataException("Corrupt data chunk.");
-                        size = data.Length - pos; // tolerate a short final chunk
-                    }
-
                     switch (id)
                     {
                         case "fmt ":
-                            if (size < 16)
+                            if (formatSeen)
+                                throw new InvalidDataException("Duplicate WAVE format chunk.");
+                            if (size < 16 || size == 17)
                                 throw new InvalidDataException("Corrupt fmt chunk.");
                             ushort format = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos));
                             channels = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos + 2));
                             sampleRate = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(pos + 4));
                             bits = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos + 14));
+                            if (size >= 18 && BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos + 16)) > size - 18)
+                                throw new InvalidDataException("WAVE format extension exceeds the chunk.");
                             if (format == FormatExtensible)
                             {
-                                if (size < 40)
+                                if (size < 40 || BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos + 16)) < 22)
                                     throw new InvalidDataException("Corrupt extensible fmt chunk.");
-                                format = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos + 24));
+                                var subFormat = new Guid(data.AsSpan(pos + 24, 16));
+                                if (subFormat != new Guid("00000001-0000-0010-8000-00aa00389b71"))
+                                    throw new NotSupportedException("Only the integer PCM extensible subformat is supported.");
+                                int validBits = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos + 18));
+                                if (validBits > bits)
+                                    throw new InvalidDataException("Extensible PCM precision exceeds its sample container.");
+                                if (validBits != bits)
+                                    throw new NotSupportedException("PCM with fewer valid bits than its sample container is not supported.");
+                                format = FormatPcm;
                             }
                             if (format != FormatPcm)
                                 throw new NotSupportedException($"WAVE format tag {format} is not supported; only integer PCM is.");
+                            if (channels < 1 || sampleRate < 1)
+                                throw new InvalidDataException("Corrupt fmt chunk.");
+                            if (Array.IndexOf(SupportedDepths, bits) < 0)
+                                throw new NotSupportedException($"{bits}-bit PCM is not supported.");
+                            int alignment = channels * (bits / 8);
+                            uint byteRate = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(pos + 8));
+                            if (BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(pos + 12)) != alignment
+                                || byteRate != (long)sampleRate * alignment)
+                                throw new InvalidDataException("PCM block alignment or byte rate does not match its format.");
                             formatSeen = true;
                             break;
 
                         case "data":
+                            if (!formatSeen || pcm != null)
+                                throw new InvalidDataException("WAVE data must follow a single format chunk and must not be repeated.");
+                            if (size % (channels * (bits / 8)) != 0)
+                                throw new InvalidDataException("PCM data ends in an incomplete sample frame.");
                             pcm = data.AsSpan(pos, size).ToArray();
                             break;
 
@@ -159,20 +173,12 @@ namespace SteganoLib.Audio
                             extra.Add(new RiffChunk(id, data.AsSpan(pos, size).ToArray()));
                             break;
                     }
-
-                    pos += size + (size & 1);
                 }
 
                 if (!formatSeen || pcm == null)
                     throw new InvalidDataException("WAVE file is missing the fmt or data chunk.");
-                if (channels < 1 || sampleRate < 1)
-                    throw new InvalidDataException("Corrupt fmt chunk.");
-                if (Array.IndexOf(SupportedDepths, bits) < 0)
-                    throw new NotSupportedException($"{bits}-bit PCM is not supported.");
-
                 int bytesPerSample = bits / 8;
                 int count = pcm.Length / bytesPerSample;
-                count -= count % channels;
                 var samples = new int[count];
                 for (int i = 0; i < count; i++)
                 {
@@ -188,8 +194,6 @@ namespace SteganoLib.Audio
 
                 return new PcmAudio(sampleRate, channels, bits, samples, extra);
             }
-
-            private static string Tag(byte[] data, int offset) => Encoding.ASCII.GetString(data, offset, 4);
         }
 
         private static class WaveWriter

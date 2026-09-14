@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -86,7 +87,9 @@ namespace SteganoLib.Test
             stream.Write(list);
             stream.Write(original, 36, original.Length - 36);
 
-            var audio = PcmAudio.Load(stream.ToArray());
+            var bytes = stream.ToArray();
+            BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4), bytes.Length - 8);
+            var audio = PcmAudio.Load(bytes);
             Assert.Single(audio.ExtraChunks);
             Assert.Equal("LIST", audio.ExtraChunks[0].Id);
 
@@ -109,11 +112,12 @@ namespace SteganoLib.Test
             stream.Write(BitConverter.GetBytes((ushort)22)); // cbSize
             stream.Write(BitConverter.GetBytes((ushort)24)); // valid bits
             stream.Write(BitConverter.GetBytes(3));          // channel mask
-            stream.Write(BitConverter.GetBytes((ushort)1));  // sub format: PCM
-            stream.Write(new byte[14]);
+            stream.Write(new Guid("00000001-0000-0010-8000-00aa00389b71").ToByteArray()); // PCM subformat
             stream.Write(original, 36, original.Length - 36);
 
-            var audio = PcmAudio.Load(stream.ToArray());
+            var bytes = stream.ToArray();
+            BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4), bytes.Length - 8);
+            var audio = PcmAudio.Load(bytes);
             Assert.Equal(24, audio.BitsPerSample);
             Assert.Equal(PcmAudio.Load(original).Samples, audio.Samples);
         }

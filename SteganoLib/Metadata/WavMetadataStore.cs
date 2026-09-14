@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 
 using SteganoLib.Audio;
+using SteganoLib.Containers;
 
 namespace SteganoLib.Metadata
 {
@@ -25,7 +26,7 @@ namespace SteganoLib.Metadata
 
         private readonly List<RiffChunk> _chunks;
 
-        /// <exception cref="InvalidDataException">Not a RIFF WAVE file.</exception>
+        /// <exception cref="InvalidDataException">Invalid RIFF WAVE signature, chunk boundaries, padding or nested lists.</exception>
         public WavMetadataStore(byte[] wav, string chunkId = DefaultChunkId)
         {
             if (wav == null) throw new ArgumentNullException(nameof(wav));
@@ -115,23 +116,10 @@ namespace SteganoLib.Metadata
 
         private static List<RiffChunk> Parse(byte[] wav)
         {
-            if (!IsWav(wav))
-                throw new InvalidDataException("Not a RIFF WAVE file.");
-
+            int end = RiffReader.ContainerEnd(wav, "WAVE");
             var chunks = new List<RiffChunk>();
-            int pos = 12;
-            while (pos + 8 <= wav.Length)
-            {
-                string id = Tag(wav, pos);
-                uint declared = BinaryPrimitives.ReadUInt32LittleEndian(wav.AsSpan(pos + 4));
-                pos += 8;
-                int size = declared > int.MaxValue || pos + (long)declared > wav.Length
-                    ? wav.Length - pos // tolerate a short final chunk
-                    : (int)declared;
-
-                chunks.Add(new RiffChunk(id, wav.AsSpan(pos, size).ToArray()));
-                pos += size + (size & 1);
-            }
+            foreach (var (id, offset, size) in RiffReader.Chunks(wav, 12, end))
+                chunks.Add(new RiffChunk(id, wav.AsSpan(offset, size).ToArray()));
             return chunks;
         }
 

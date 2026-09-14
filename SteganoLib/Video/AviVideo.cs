@@ -6,6 +6,7 @@ using System.Text;
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SteganoLib.Containers;
 using SteganoLib.Jpeg;
 
 namespace SteganoLib.Video
@@ -49,6 +50,8 @@ namespace SteganoLib.Video
             if (width < 1) throw new ArgumentOutOfRangeException(nameof(width));
             if (height < 1) throw new ArgumentOutOfRangeException(nameof(height));
             if (bitCount != 24 && bitCount != 32) throw new ArgumentOutOfRangeException(nameof(bitCount), "Only 24- and 32-bit RGB frames are supported.");
+            if (codec == AviCodec.Rgb && RgbByteLength(width, height, bitCount) > Array.MaxLength)
+                throw new ArgumentOutOfRangeException(nameof(width), "RGB dimensions exceed the supported frame length.");
             if (frameRateNumerator < 1) throw new ArgumentOutOfRangeException(nameof(frameRateNumerator));
             if (frameRateDenominator < 1) throw new ArgumentOutOfRangeException(nameof(frameRateDenominator));
 
@@ -88,9 +91,11 @@ namespace SteganoLib.Video
             _frames = new List<int>();
             _videoStream = -1;
 
-            int riffEnd = ChunkEnd(data, 0);
+            int riffEnd = RiffReader.ContainerEnd(data, "AVI ", allowTrailing: true);
             if (riffEnd < data.Length && data.Length - riffEnd >= 12 && Tag(data, riffEnd) == "RIFF")
                 throw new NotSupportedException("OpenDML AVI files with AVIX extension chunks are not supported.");
+            if (riffEnd != data.Length)
+                throw new InvalidDataException("Unexpected data after the AVI RIFF container.");
 
             bool hdrlSeen = false, moviSeen = false;
             foreach (var (id, offset, size) in Chunks(data, 12, riffEnd))
@@ -98,11 +103,15 @@ namespace SteganoLib.Video
                 string listType = id == "LIST" && size >= 4 ? Tag(data, offset) : null;
                 if (listType == "hdrl")
                 {
+                    if (hdrlSeen || moviSeen)
+                        throw new InvalidDataException("AVI header list is repeated or follows movie data.");
                     ParseHeaderList(data, offset + 4, offset + size);
                     hdrlSeen = true;
                 }
                 else if (listType == "movi")
                 {
+                    if (!hdrlSeen || moviSeen)
+                        throw new InvalidDataException("AVI movie data must follow one header list and must not be repeated.");
                     ParseMovieList(data, offset + 4, offset + size);
                     moviSeen = true;
                 }
@@ -123,6 +132,8 @@ namespace SteganoLib.Video
             var strh = FindChunk(_streams[_videoStream], "strh");
             Width = BinaryPrimitives.ReadInt32LittleEndian(strf.AsSpan(4));
             int rawHeight = BinaryPrimitives.ReadInt32LittleEndian(strf.AsSpan(8));
+            if (rawHeight == int.MinValue)
+                throw new InvalidDataException("AVI height is outside the supported range.");
             Height = Math.Abs(rawHeight);
             TopDown = rawHeight < 0;
             BitCount = BinaryPrimitives.ReadUInt16LittleEndian(strf.AsSpan(14));
@@ -130,8 +141,13 @@ namespace SteganoLib.Video
             string fourcc = Ascii.GetString(strf, 16, 4).ToUpperInvariant();
             FrameRateDenominator = BinaryPrimitives.ReadInt32LittleEndian(strh.AsSpan(20));
             FrameRateNumerator = BinaryPrimitives.ReadInt32LittleEndian(strh.AsSpan(24));
-            if (FrameRateDenominator < 1) FrameRateDenominator = 1;
-            if (FrameRateNumerator < 1) FrameRateNumerator = 25;
+            if (FrameRateDenominator < 1 || FrameRateNumerator < 1)
+                throw new InvalidDataException("AVI frame-rate numerator and denominator must be positive.");
+            uint bitmapSize = BinaryPrimitives.ReadUInt32LittleEndian(strf);
+            if (bitmapSize < BitmapInfoSize || bitmapSize > strf.Length || BinaryPrimitives.ReadUInt16LittleEndian(strf.AsSpan(12)) != 1)
+                throw new InvalidDataException("Invalid AVI bitmap header size or plane count.");
+            if (BinaryPrimitives.ReadUInt32LittleEndian(_avih.AsSpan(24)) != _streams.Count)
+                throw new InvalidDataException("AVI stream count does not match the header lists.");
 
             if (Width < 1 || Height < 1)
                 throw new InvalidDataException("AVI video stream has no dimensions.");
@@ -142,6 +158,19 @@ namespace SteganoLib.Video
                 Codec = AviCodec.Mjpeg;
             else
                 throw new NotSupportedException($"AVI video codec {(compression == 0 ? BitCount + "-bit RGB" : fourcc)} is not supported; only uncompressed 24/32-bit RGB and MJPEG are.");
+
+            if (Codec == AviCodec.Rgb && RgbByteLength(Width, Height, BitCount) > Array.MaxLength)
+                throw new InvalidDataException("AVI RGB dimensions exceed the supported frame length.");
+            foreach (int frame in _frames)
+            {
+                var bytes = _movi[frame].Data;
+                if (bytes.Length == 0)
+                    throw new NotSupportedException("Zero-length dropped AVI frames are not supported.");
+                if (Codec == AviCodec.Rgb && bytes.Length != RgbByteLength(Width, Height, BitCount))
+                    throw new InvalidDataException("AVI RGB frame length does not match its dimensions.");
+                if (Codec == AviCodec.Mjpeg && !IsJpegSignature(bytes))
+                    throw new InvalidDataException("AVI MJPEG frame is missing its JPEG signature.");
+            }
         }
 
         public int Width { get; }
@@ -167,7 +196,7 @@ namespace SteganoLib.Video
         public TimeSpan Duration => TimeSpan.FromSeconds(FrameCount / FrameRate);
 
         /// <summary>Bytes per row of an RGB frame, padded to four bytes.</summary>
-        public int Stride => (Width * BitCount / 8 + 3) & ~3;
+        public int Stride => checked((int)(((long)Width * BitCount / 8 + 3) & ~3L));
 
         /// <summary>Video stream number in the file; frame chunk ids start with it, e.g. <c>00db</c>.</summary>
         public int VideoStreamIndex => _videoStream;
@@ -209,8 +238,8 @@ namespace SteganoLib.Video
             return new AviVideo(width, height, AviCodec.Mjpeg, 24, frameRateNumerator, frameRateDenominator);
         }
 
-        /// <exception cref="InvalidDataException">Not a RIFF AVI or the headers are corrupt.</exception>
-        /// <exception cref="NotSupportedException">No video stream, an unsupported codec, or an OpenDML file.</exception>
+        /// <exception cref="InvalidDataException">Invalid RIFF boundaries, AVI headers or RGB frame sizes.</exception>
+        /// <exception cref="NotSupportedException">Unsupported codecs, multiple video streams, dropped frames, movie list types or OpenDML files.</exception>
         public static AviVideo Load(byte[] data)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
@@ -287,7 +316,10 @@ namespace SteganoLib.Video
         public JpegImage DecodeJpegFrame(int index)
         {
             RequireCodec(AviCodec.Mjpeg);
-            return JpegImage.Load(GetFrameData(index));
+            var image = JpegImage.Load(GetFrameData(index));
+            if (image.Width != Width || image.Height != Height)
+                throw new InvalidDataException("MJPEG frame dimensions do not match the AVI stream.");
+            return image;
         }
 
         public void EncodeJpegFrame(int index, JpegImage image)
@@ -377,6 +409,8 @@ namespace SteganoLib.Video
             {
                 if (id == "avih")
                 {
+                    if (_avih != null)
+                        throw new InvalidDataException("Duplicate AVI main header.");
                     if (size < MainHeaderSize)
                         throw new InvalidDataException("AVI main header is too short.");
                     _avih = data.AsSpan(offset, size).ToArray();
@@ -390,8 +424,10 @@ namespace SteganoLib.Video
                     var strh = FindChunk(chunks, "strh");
                     if (strh == null || strh.Length < StreamHeaderSize)
                         throw new InvalidDataException("AVI stream header is missing or too short.");
-                    if (_videoStream < 0 && Ascii.GetString(strh, 0, 4) == "vids")
+                    if (Ascii.GetString(strh, 0, 4) == "vids")
                     {
+                        if (_videoStream >= 0)
+                            throw new NotSupportedException("Multiple AVI video streams are not supported.");
                         var strf = FindChunk(chunks, "strf");
                         if (strf == null || strf.Length < BitmapInfoSize)
                             throw new InvalidDataException("AVI video stream has no bitmap header.");
@@ -409,60 +445,54 @@ namespace SteganoLib.Video
         private void ParseMovieList(byte[] data, int start, int end)
         {
             string prefix = _videoStream.ToString("D2");
-            foreach (var (id, offset, size) in Chunks(data, start, end))
+            var pending = new Stack<(int Start, int End)>();
+            pending.Push((start, end));
+            while (pending.Count > 0)
             {
-                if (id == "LIST")
+                var range = pending.Pop();
+                foreach (var (id, offset, size) in Chunks(data, range.Start, range.End))
                 {
-                    if (size >= 4 && Tag(data, offset) == "rec ")
-                        ParseMovieList(data, offset + 4, offset + size);
-                    continue;
+                    if (id == "LIST")
+                    {
+                        if (Tag(data, offset) != "rec ")
+                            throw new NotSupportedException("Only record lists are supported inside AVI movie data.");
+                        // Resume siblings after visiting the record, preserving frame/audio order.
+                        pending.Push((offset + size + (size & 1), range.End));
+                        pending.Push((offset + 4, offset + size));
+                        break;
+                    }
+                    if (id.StartsWith("ix", StringComparison.Ordinal))
+                        continue; // OpenDML sub-index, stale after rewriting
+
+                    if (id.StartsWith(prefix, StringComparison.Ordinal) && (id.EndsWith("db", StringComparison.Ordinal) || id.EndsWith("dc", StringComparison.Ordinal)))
+                        _frames.Add(_movi.Count);
+                    _movi.Add((id, data.AsSpan(offset, size).ToArray()));
                 }
-                if (id.StartsWith("ix", StringComparison.Ordinal))
-                    continue; // OpenDML sub-index, stale after rewriting
-
-                if (id.StartsWith(prefix, StringComparison.Ordinal) && (id.EndsWith("db", StringComparison.Ordinal) || id.EndsWith("dc", StringComparison.Ordinal)))
-                    _frames.Add(_movi.Count);
-                _movi.Add((id, data.AsSpan(offset, size).ToArray()));
             }
         }
 
-        /// <summary>Chunks between <paramref name="start"/> and <paramref name="end"/>: id, offset of the body, body size.</summary>
         private static IEnumerable<(string Id, int Offset, int Size)> Chunks(byte[] data, int start, int end)
-        {
-            int pos = start;
-            end = Math.Min(end, data.Length);
-            while (pos + 8 <= end)
-            {
-                string id = Tag(data, pos);
-                uint declared = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(pos + 4));
-                pos += 8;
-                int size = declared > int.MaxValue || pos + (long)declared > end ? end - pos : (int)declared;
-                yield return (id, pos, size);
-                pos += size + (size & 1);
-            }
-        }
-
-        private static int ChunkEnd(byte[] data, int chunkStart)
-        {
-            uint declared = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(chunkStart + 4));
-            long end = chunkStart + 8 + (long)declared;
-            return (int)Math.Min(end, data.Length);
-        }
+            => RiffReader.Chunks(data, start, end);
 
         private static byte[] RawChunk(byte[] data, int chunkStart, int size)
         {
-            int length = Math.Min(8 + size + (size & 1), data.Length - chunkStart);
+            int length = checked(8 + size + (size & 1));
             return data.AsSpan(chunkStart, length).ToArray();
         }
 
         private static byte[] FindChunk(List<(string Id, byte[] Data)> chunks, string id)
         {
+            byte[] found = null;
             foreach (var (chunkId, data) in chunks)
             {
                 if (chunkId == id)
-                    return data;
+                {
+                    if (found != null)
+                        throw new InvalidDataException($"Duplicate AVI {id} chunk.");
+                    found = data;
+                }
             }
-            return null;
+            return found;
         }
 
         private static string Tag(ReadOnlySpan<byte> data, int offset) => Ascii.GetString(data.Slice(offset, 4));
@@ -547,6 +577,12 @@ namespace SteganoLib.Video
             return _frames[index];
         }
 
+        private static long RgbByteLength(int width, int height, int bitCount)
+        {
+            long stride = ((long)width * bitCount / 8 + 3) & ~3L;
+            return stride > long.MaxValue / height ? long.MaxValue : stride * height;
+        }
+
         private byte[] ValidateFrame(byte[] data)
         {
             if (data == null)
@@ -554,8 +590,9 @@ namespace SteganoLib.Video
 
             if (Codec == AviCodec.Rgb)
             {
-                if (data.Length != Stride * Height)
-                    throw new ArgumentException($"An RGB frame must be exactly {Stride * Height} bytes ({Width}x{Height}, {BitCount}-bit, rows padded to 4 bytes).", nameof(data));
+                long required = RgbByteLength(Width, Height, BitCount);
+                if (data.Length != required)
+                    throw new ArgumentException($"An RGB frame must be exactly {required} bytes ({Width}x{Height}, {BitCount}-bit, rows padded to 4 bytes).", nameof(data));
             }
             else if (!IsJpegSignature(data))
             {

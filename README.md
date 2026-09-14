@@ -71,6 +71,14 @@ JPEG coefficient loading checks segment boundaries, table and component referenc
 
 Redefining a quantisation table after a component has used it is currently unsupported and throws `NotSupportedException`, because the in-memory representation cannot preserve different versions of the same table. This avoids silently changing pixels when saving. F5 extraction also checks the full coefficient requirement of matrix groups and trellis widths before allocating payload buffers.
 
+## RIFF input validation
+
+WAV, AVI and WAV metadata readers require complete RIFF containers, including chunk headers, payloads, padding and nested list boundaries. Truncated chunks and trailing bytes outside the declared container now raise `InvalidDataException`. The shared checks use the [RIFF chunk layout](https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference).
+
+PCM loading also requires consistent byte rate and sample alignment, a single format chunk before a single data chunk, and complete sample frames. Extensible PCM requires the full PCM subformat GUID; sample precision smaller than the container width is currently unsupported. WAV metadata editing preserves audio bytes without interpreting their encoding, so float and compressed formats remain usable as metadata carriers.
+
+AVI loading validates dimensions, bitmap headers, frame timing and RGB frame sizes. MJPEG content and dimensions are checked when decoding each frame. Record lists are traversed iteratively. Multiple video streams, zero-length dropped frames, movie lists other than `rec `, and OpenDML extensions are explicitly unsupported.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with
