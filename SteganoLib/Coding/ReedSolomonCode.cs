@@ -61,13 +61,17 @@ namespace SteganoLib.Coding
         public byte[] Encode(byte[] data)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
+            return Encode(data.AsSpan());
+        }
 
+        public byte[] Encode(ReadOnlySpan<byte> data)
+        {
             var encoded = new byte[EncodedLength(data.Length)];
             int read = 0, written = 0;
             while (read < data.Length)
             {
                 int length = Math.Min(DataSize, data.Length - read);
-                EncodeBlock(data.AsSpan(read, length), encoded.AsSpan(written, length + ParitySymbols));
+                EncodeBlock(data.Slice(read, length), encoded.AsSpan(written, length + ParitySymbols));
                 read += length;
                 written += length + ParitySymbols;
             }
@@ -77,7 +81,11 @@ namespace SteganoLib.Coding
         public bool TryDecode(byte[] encoded, out byte[] data, out int correctedSymbols)
         {
             if (encoded == null) throw new ArgumentNullException(nameof(encoded));
+            return TryDecode(encoded.AsSpan(), out data, out correctedSymbols);
+        }
 
+        public bool TryDecode(ReadOnlySpan<byte> encoded, out byte[] data, out int correctedSymbols)
+        {
             data = null;
             correctedSymbols = 0;
             if (encoded.Length == 0)
@@ -90,7 +98,7 @@ namespace SteganoLib.Coding
             if (lastBlock <= ParitySymbols)
                 return false;
 
-            var stream = Interleave ? Interleaver.Inverse(encoded, BlockSize) : (byte[])encoded.Clone();
+            var stream = Interleave ? Interleaver.Inverse(encoded, BlockSize) : encoded.ToArray();
             var result = new byte[encoded.Length - (encoded.Length + BlockSize - 1) / BlockSize * ParitySymbols];
             int read = 0, written = 0;
             while (read < stream.Length)
@@ -280,7 +288,7 @@ namespace SteganoLib.Coding
         /// <summary>Block interleaver: rows are blocks of <c>blockSize</c> (last may be short), output is read column by column.</summary>
         internal static class Interleaver
         {
-            public static byte[] Forward(byte[] stream, int blockSize)
+            public static byte[] Forward(ReadOnlySpan<byte> stream, int blockSize)
             {
                 var output = new byte[stream.Length];
                 int k = 0;
@@ -289,7 +297,7 @@ namespace SteganoLib.Coding
                 return output;
             }
 
-            public static byte[] Inverse(byte[] stream, int blockSize)
+            public static byte[] Inverse(ReadOnlySpan<byte> stream, int blockSize)
             {
                 var output = new byte[stream.Length];
                 int k = 0;

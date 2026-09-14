@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteganoLib.Test", "SteganoL
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteganoLib.Cli", "SteganoLib.Cli\SteganoLib.Cli.csproj", "{7D3F1C52-9B6E-4E0A-8C1D-2F5A6B7C8D9E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SteganoLib.Benchmarks", "SteganoLib.Benchmarks\SteganoLib.Benchmarks.csproj", "{A1B2C3D4-1111-4E5F-8A9B-0C1D2E3F4A5B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,6 +28,10 @@ Global
 		{7D3F1C52-9B6E-4E0A-8C1D-2F5A6B7C8D9E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7D3F1C52-9B6E-4E0A-8C1D-2F5A6B7C8D9E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7D3F1C52-9B6E-4E0A-8C1D-2F5A6B7C8D9E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1B2C3D4-1111-4E5F-8A9B-0C1D2E3F4A5B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-1111-4E5F-8A9B-0C1D2E3F4A5B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-1111-4E5F-8A9B-0C1D2E3F4A5B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-1111-4E5F-8A9B-0C1D2E3F4A5B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

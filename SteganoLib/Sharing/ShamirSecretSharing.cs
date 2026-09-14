@@ -33,7 +33,11 @@ namespace SteganoLib.Sharing
         public IReadOnlyList<Share> Split(byte[] secret)
         {
             if (secret == null) throw new ArgumentNullException(nameof(secret));
+            return Split(secret.AsSpan());
+        }
 
+        public IReadOnlyList<Share> Split(ReadOnlySpan<byte> secret)
+        {
             var shares = new byte[ShareCount][];
             for (int i = 0; i < ShareCount; i++)
                 shares[i] = new byte[secret.Length];

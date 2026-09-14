@@ -32,6 +32,16 @@ stegano compare --cover cover.png --stego stego.png
 
 The carrier type follows the file extension: PNG, BMP and TIFF use LSB matching in keyed pixel order, JPEG uses F5, WAV uses sample LSB, and text files use zero-width characters (`--text-method whitespace` or `homoglyph` for the alternatives). `--carrier metadata` hides the payload in a PNG chunk, JPEG APP segment or WAV chunk instead of the signal. Every payload is sealed with the key, so extraction reports whether a payload was found and whether it authenticates. Exit code 0 means success, 1 a failed operation such as a wrong key, and 2 a usage error.
 
+## Benchmarks
+
+`SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with
+
+```
+dotnet run -c Release --project SteganoLib.Benchmarks -- --filter '*'
+```
+
+and add `--job short` for a quick pass or a class name such as `*Lsb*` to the filter. On a 1024x768 cover the keyed pixel permutation (an 8-round Feistel network with SipHash-2-4) accounts for most of the LSB embedding time; pixel access is negligible.
+
 ## Compilation
 
 ### Prerequisites

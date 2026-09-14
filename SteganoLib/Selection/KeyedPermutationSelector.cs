@@ -40,7 +40,8 @@ namespace SteganoLib.Selection
             for (long i = 0; i < count; i++)
             {
                 long index = permutation.Permute(i);
-                yield return new Point((int)(index % width), (int)(index / width));
+                long y = index / width; // one division; the remainder follows from it
+                yield return new Point((int)(index - y * width), (int)y);
             }
         }
     }

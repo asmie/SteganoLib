@@ -50,11 +50,16 @@ namespace SteganoLib.Payload
         {
             if (payload == null)
                 throw new ArgumentNullException(nameof(payload));
+            return Seal(payload.AsSpan(), key);
+        }
+
+        public byte[] Seal(ReadOnlySpan<byte> payload, StegoKey key)
+        {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
 
             byte flags = 0;
-            byte[] body = payload;
+            ReadOnlySpan<byte> body = payload;
 
             if (Compress)
             {
@@ -80,6 +85,11 @@ namespace SteganoLib.Payload
         {
             if (sealedData == null)
                 throw new ArgumentNullException(nameof(sealedData));
+            return Open(sealedData.AsSpan(), key);
+        }
+
+        public ExtractResult Open(ReadOnlySpan<byte> sealedData, StegoKey key)
+        {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
 
@@ -90,11 +100,12 @@ namespace SteganoLib.Payload
                 return ExtractResult.Unsupported();
 
             byte flags = sealedData[3];
-            var codec = _codecs.FirstOrDefault(c => c.Id == sealedData[4]);
+            byte codecId = sealedData[4];
+            var codec = _codecs.FirstOrDefault(c => c.Id == codecId);
             if (codec == null)
                 return ExtractResult.Unsupported();
 
-            if (!codec.TryOpen(sealedData.AsSpan(HeaderSize), sealedData.AsSpan(0, HeaderSize), key, out var body))
+            if (!codec.TryOpen(sealedData.Slice(HeaderSize), sealedData.Slice(0, HeaderSize), key, out var body))
                 return ExtractResult.AuthenticationFailed();
 
             if ((flags & FlagCompressed) != 0)
@@ -112,11 +123,11 @@ namespace SteganoLib.Payload
             return ExtractResult.Success(body);
         }
 
-        private static byte[] BrotliCompress(byte[] input)
+        private static byte[] BrotliCompress(ReadOnlySpan<byte> input)
         {
             using var output = new MemoryStream();
             using (var brotli = new BrotliStream(output, CompressionLevel.Optimal, leaveOpen: true))
-                brotli.Write(input, 0, input.Length);
+                brotli.Write(input);
             return output.ToArray();
         }
 

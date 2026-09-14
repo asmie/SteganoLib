@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -54,7 +55,9 @@ namespace SteganoLib.Algorithms
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
-            SlotEmbedding.Embed(new Carrier(this, image), data, TrellisCoder, _maxTrellisWidth);
+            var carrier = new Carrier(this, image);
+            SlotEmbedding.Embed(carrier, data, TrellisCoder, _maxTrellisWidth);
+            carrier.Commit();
         }
 
         /// <inheritdoc />
@@ -223,12 +226,21 @@ namespace SteganoLib.Algorithms
             private readonly LSB _owner;
             private readonly Image<Rgba32> _image;
             private readonly int _stableShift;
+            private readonly int _width;
+
+            // The hot path: every slot read and write goes to this flat RGBA copy of the
+            // image (channel index = byte offset within a pixel), and the rows are written
+            // back once in Commit. Going through the image indexer twice per slot cost
+            // more than the embedding itself.
+            private byte[] _pixels;
+            private bool _dirty;
 
             public Carrier(LSB owner, Image<Rgba32> image)
             {
                 _owner = owner;
                 _image = image;
                 _stableShift = owner.StableShift();
+                _width = image.Width;
             }
 
             public override long TotalSlots() => _owner.TotalSlots(_image);
@@ -237,22 +249,47 @@ namespace SteganoLib.Algorithms
 
             public override bool Read((int X, int Y, int Channel) slot)
             {
-                var p = _image[slot.X, slot.Y];
-                byte value = slot.Channel switch { 0 => p.R, 1 => p.G, _ => p.B };
-                return (value & 1) == 1;
+                return (Pixels()[Offset(slot)] & 1) == 1;
             }
 
             public override void Write((int X, int Y, int Channel) slot, bool bit, bool up)
             {
-                var p = _image[slot.X, slot.Y];
-                switch (slot.Channel)
-                {
-                    case 0: p.R = _owner.Adjust(p.R, bit, up, _stableShift); break;
-                    case 1: p.G = _owner.Adjust(p.G, bit, up, _stableShift); break;
-                    default: p.B = _owner.Adjust(p.B, bit, up, _stableShift); break;
-                }
-                _image[slot.X, slot.Y] = p;
+                var pixels = Pixels();
+                int offset = Offset(slot);
+                byte adjusted = _owner.Adjust(pixels[offset], bit, up, _stableShift);
+                if (adjusted == pixels[offset])
+                    return;
+                pixels[offset] = adjusted;
+                _dirty = true;
             }
+
+            /// <summary>Write changed pixels back to the image.</summary>
+            public void Commit()
+            {
+                if (!_dirty)
+                    return;
+
+                var pixels = _pixels;
+                int rowBytes = _width * 4;
+                _image.ProcessPixelRows(accessor =>
+                {
+                    for (int y = 0; y < accessor.Height; y++)
+                        MemoryMarshal.Cast<byte, Rgba32>(pixels.AsSpan(y * rowBytes, rowBytes)).CopyTo(accessor.GetRowSpan(y));
+                });
+                _dirty = false;
+            }
+
+            private byte[] Pixels()
+            {
+                if (_pixels == null)
+                {
+                    _pixels = new byte[_width * _image.Height * 4];
+                    _image.CopyPixelDataTo(_pixels);
+                }
+                return _pixels;
+            }
+
+            private int Offset((int X, int Y, int Channel) slot) => (slot.Y * _width + slot.X) * 4 + slot.Channel;
 
             public override double Cost((int X, int Y, int Channel) slot) => _owner._costModel.Cost(_image, slot.X, slot.Y, slot.Channel);
         }
