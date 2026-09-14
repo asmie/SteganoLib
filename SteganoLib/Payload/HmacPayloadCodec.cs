@@ -6,8 +6,9 @@ using SteganoLib.Crypto;
 namespace SteganoLib.Payload
 {
     /// <summary>
-    /// Integrity only: plaintext followed by an HMAC-SHA256 tag. Use when the data
-    /// is already encrypted and you only need to detect a wrong key or tampering.
+    /// Integrity only: plaintext followed by an HMAC-SHA256 tag over the associated data
+    /// and the plaintext. Use when the data is already encrypted and you only need to
+    /// detect a wrong key or tampering.
     /// </summary>
     public sealed class HmacPayloadCodec : IPayloadCodec
     {
@@ -19,18 +20,18 @@ namespace SteganoLib.Payload
 
         public int Overhead => TagSize;
 
-        public byte[] Seal(ReadOnlySpan<byte> plaintext, StegoKey key)
+        public byte[] Seal(ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> associatedData, StegoKey key)
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
 
             var output = new byte[plaintext.Length + TagSize];
             plaintext.CopyTo(output);
-            HMACSHA256.HashData(key.Derive(Purpose, KeySize), plaintext, output.AsSpan(plaintext.Length));
+            Tag(key, associatedData, plaintext, output.AsSpan(plaintext.Length));
             return output;
         }
 
-        public bool TryOpen(ReadOnlySpan<byte> sealedBody, StegoKey key, out byte[] plaintext)
+        public bool TryOpen(ReadOnlySpan<byte> sealedBody, ReadOnlySpan<byte> associatedData, StegoKey key, out byte[] plaintext)
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
@@ -43,13 +44,25 @@ namespace SteganoLib.Payload
             var tag = sealedBody.Slice(body.Length);
 
             Span<byte> expected = stackalloc byte[TagSize];
-            HMACSHA256.HashData(key.Derive(Purpose, KeySize), body, expected);
+            Tag(key, associatedData, body, expected);
 
             if (!CryptographicOperations.FixedTimeEquals(expected, tag))
                 return false;
 
             plaintext = body.ToArray();
             return true;
+        }
+
+        /// <summary>HMAC over the associated data's length, the associated data, then the body, so the two cannot trade bytes.</summary>
+        private static void Tag(StegoKey key, ReadOnlySpan<byte> associatedData, ReadOnlySpan<byte> body, Span<byte> destination)
+        {
+            using var hmac = IncrementalHash.CreateHMAC(HashAlgorithmName.SHA256, key.Derive(Purpose, KeySize));
+            Span<byte> length = stackalloc byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, associatedData.Length);
+            hmac.AppendData(length);
+            hmac.AppendData(associatedData);
+            hmac.AppendData(body);
+            hmac.GetHashAndReset(destination);
         }
     }
 }

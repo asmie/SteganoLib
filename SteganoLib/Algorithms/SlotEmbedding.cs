@@ -35,9 +35,15 @@ namespace SteganoLib.Algorithms
 
         public static void Embed<TSlot>(SlotCarrier<TSlot> carrier, byte[] data, SyndromeTrellisCoder coder, int maxTrellisWidth)
         {
-            long capacity = Capacity(carrier.TotalSlots());
+            long totalSlots = carrier.TotalSlots();
+            long capacity = Capacity(totalSlots);
             if (data.Length > capacity)
                 throw new CapacityExceededException(data.Length, capacity);
+
+            // Nothing to say and no room for a header: leave the carrier alone. Extraction
+            // returns an empty payload either way, so the round trip still holds.
+            if (data.Length == 0 && totalSlots < HeaderBits)
+                return;
 
             var directions = new BitArray(RandomNumberGenerator.GetBytes(HeaderSize + data.Length));
 

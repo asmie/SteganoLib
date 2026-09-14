@@ -65,6 +65,20 @@ namespace SteganoLib.Test
             Assert.Equal(ExtractionStatus.AuthenticationFailed, envelope.Open(sealedData, Key).Status);
         }
 
+        [Theory]
+        [MemberData(nameof(Codecs))]
+        public void Open_TamperedHeaderFlag_AuthenticationFailed(IPayloadCodec codec)
+        {
+            var envelope = new PayloadEnvelope(codec);
+            foreach (var payload in new[] { Array.Empty<byte>(), new byte[] { 9, 9, 9 } })
+            {
+                var sealedData = envelope.Seal(payload, Key);
+                sealedData[3] ^= 0x01; // the compression flag is in the clear but bound into the tag
+
+                Assert.Equal(ExtractionStatus.AuthenticationFailed, envelope.Open(sealedData, Key).Status);
+            }
+        }
+
         [Fact]
         public void Open_NoMagic_NotFound()
         {

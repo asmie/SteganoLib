@@ -87,6 +87,11 @@ namespace SteganoLib.Algorithms
             if (data.Length > capacity)
                 throw new CapacityExceededException(data.Length, capacity);
 
+            // Nothing to say and no room for a header: leave the image alone; extraction
+            // returns an empty payload either way.
+            if (data.Length == 0 && capacity == 0)
+                return;
+
             var arrays = Arrays(image);
             if (TrellisCoder != null)
             {

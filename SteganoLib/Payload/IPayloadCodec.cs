@@ -6,7 +6,9 @@ namespace SteganoLib.Payload
 {
     /// <summary>
     /// Protects the payload body inside a <see cref="PayloadEnvelope"/>.
-    /// A codec must detect a wrong key or a modified body in <see cref="TryOpen"/>.
+    /// A codec must detect a wrong key, a modified body or modified associated data in
+    /// <see cref="TryOpen"/>. The envelope passes its own header as the associated data,
+    /// so flags and version travel in the clear but cannot be changed unnoticed.
     /// </summary>
     public interface IPayloadCodec
     {
@@ -16,8 +18,8 @@ namespace SteganoLib.Payload
         /// <summary>Bytes added to the plaintext by <see cref="Seal"/>.</summary>
         int Overhead { get; }
 
-        byte[] Seal(ReadOnlySpan<byte> plaintext, StegoKey key);
+        byte[] Seal(ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> associatedData, StegoKey key);
 
-        bool TryOpen(ReadOnlySpan<byte> sealedBody, StegoKey key, out byte[] plaintext);
+        bool TryOpen(ReadOnlySpan<byte> sealedBody, ReadOnlySpan<byte> associatedData, StegoKey key, out byte[] plaintext);
     }
 }

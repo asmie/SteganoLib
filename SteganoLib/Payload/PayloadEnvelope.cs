@@ -67,14 +67,11 @@ namespace SteganoLib.Payload
             }
 
             var codec = _codecs[0];
-            var sealedBody = codec.Seal(body, key);
+            var header = new byte[] { Magic[0], Magic[1], Version, flags, codec.Id };
+            var sealedBody = codec.Seal(body, header, key); // the header is bound into the tag
 
             var output = new byte[HeaderSize + sealedBody.Length];
-            output[0] = Magic[0];
-            output[1] = Magic[1];
-            output[2] = Version;
-            output[3] = flags;
-            output[4] = codec.Id;
+            header.CopyTo(output, 0);
             sealedBody.CopyTo(output, HeaderSize);
             return output;
         }
@@ -97,7 +94,7 @@ namespace SteganoLib.Payload
             if (codec == null)
                 return ExtractResult.Unsupported();
 
-            if (!codec.TryOpen(sealedData.AsSpan(HeaderSize), key, out var body))
+            if (!codec.TryOpen(sealedData.AsSpan(HeaderSize), sealedData.AsSpan(0, HeaderSize), key, out var body))
                 return ExtractResult.AuthenticationFailed();
 
             if ((flags & FlagCompressed) != 0)

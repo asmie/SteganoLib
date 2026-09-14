@@ -5,7 +5,7 @@ using SteganoLib.Crypto;
 
 namespace SteganoLib.Payload
 {
-    /// <summary>AES-256-GCM. Body layout: 12-byte nonce, ciphertext, 16-byte tag.</summary>
+    /// <summary>AES-256-GCM with the associated data bound into the tag. Body layout: 12-byte nonce, ciphertext, 16-byte tag.</summary>
     public sealed class AesGcmPayloadCodec : IPayloadCodec
     {
         private const string Purpose = "SteganoLib/payload/aes-gcm/v1";
@@ -17,7 +17,7 @@ namespace SteganoLib.Payload
 
         public int Overhead => NonceSize + TagSize;
 
-        public byte[] Seal(ReadOnlySpan<byte> plaintext, StegoKey key)
+        public byte[] Seal(ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> associatedData, StegoKey key)
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
@@ -29,12 +29,12 @@ namespace SteganoLib.Payload
 
             RandomNumberGenerator.Fill(nonce);
             using var aes = new AesGcm(key.Derive(Purpose, KeySize), TagSize);
-            aes.Encrypt(nonce, plaintext, ciphertext, tag);
+            aes.Encrypt(nonce, plaintext, ciphertext, tag, associatedData);
 
             return output;
         }
 
-        public bool TryOpen(ReadOnlySpan<byte> sealedBody, StegoKey key, out byte[] plaintext)
+        public bool TryOpen(ReadOnlySpan<byte> sealedBody, ReadOnlySpan<byte> associatedData, StegoKey key, out byte[] plaintext)
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
@@ -51,7 +51,7 @@ namespace SteganoLib.Payload
             try
             {
                 using var aes = new AesGcm(key.Derive(Purpose, KeySize), TagSize);
-                aes.Decrypt(nonce, ciphertext, tag, result);
+                aes.Decrypt(nonce, ciphertext, tag, result, associatedData);
             }
             catch (AuthenticationTagMismatchException)
             {
