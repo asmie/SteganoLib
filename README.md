@@ -97,6 +97,14 @@ Use `PRNG.RegisterPRNGFactory(name, seed => new CustomRandom(seed))` or `Symmetr
 
 These changes retain seeded `Random` sequences and the encrypted message format. Nullability analysis is now enabled for `PRNG` and `SymmetricCrypto`; broader API annotation work remains in progress.
 
+## Payload codec contracts
+
+`PayloadEnvelope` copies the codec list and retains the codec objects. Configure codecs before registration: their identifiers and fixed, nonnegative overhead must stay unchanged. The envelope rejects invalid overhead during construction and checks codec declarations and output lengths during use. A codec that returns null when sealing, or reports successful opening with null or incorrectly sized plaintext, raises `InvalidOperationException`. These checks prevent null codec outputs from being mistaken for valid empty payloads. Codec output arrays belong to the caller and must not reuse buffers retained by the codec.
+
+Envelope and pipeline APIs now carry nullable annotations. `ExtractResult.Data` is nullable; checking `IsSuccess` lets nullable-aware callers safely access it. The returned byte array remains mutable, and copying an `ExtractResult` shares that array. `ExtractResult.Success(data)` retains the supplied array; passing null still means an empty payload for compatibility. Pipelines reject null keys before invoking carrier code.
+
+The existing envelope format is unchanged. Unknown flags on an authenticated envelope produce `Unsupported`; changing flags without a valid authentication tag still produces `AuthenticationFailed`. Keep algorithm, envelope and codec configuration stable during operations. Concurrent use requires independent carriers and thread-safe dependencies. Configurable extraction limits and complete compressed-stream validation remain planned work.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

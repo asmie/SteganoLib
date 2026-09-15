@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace SteganoLib.Payload
 {
@@ -20,7 +23,7 @@ namespace SteganoLib.Payload
     /// <summary>Extraction outcome. A default value represents <see cref="ExtractionStatus.NotFound"/>.</summary>
     public readonly struct ExtractResult
     {
-        private ExtractResult(ExtractionStatus status, byte[] data)
+        private ExtractResult(ExtractionStatus status, byte[]? data)
         {
             _status = status;
             Data = data;
@@ -34,12 +37,14 @@ namespace SteganoLib.Payload
             ? ExtractionStatus.NotFound
             : _status;
 
-        /// <summary>Recovered bytes on <see cref="ExtractionStatus.Success"/>, otherwise <c>null</c>.</summary>
-        public byte[] Data { get; }
+        /// <summary>Recovered mutable bytes on success, otherwise null. Copies of the result share this array.</summary>
+        public byte[]? Data { get; }
 
+        [MemberNotNullWhen(true, nameof(Data))]
         public bool IsSuccess => Status == ExtractionStatus.Success;
 
-        public static ExtractResult Success(byte[] data) => new(ExtractionStatus.Success, data ?? Array.Empty<byte>());
+        /// <summary>Stores the supplied array without copying it. Null is treated as an empty payload for compatibility.</summary>
+        public static ExtractResult Success(byte[]? data) => new(ExtractionStatus.Success, data ?? Array.Empty<byte>());
 
         public static ExtractResult NotFound() => new(ExtractionStatus.NotFound, null);
 

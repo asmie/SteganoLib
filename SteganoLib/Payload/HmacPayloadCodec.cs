@@ -1,4 +1,7 @@
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 
 using SteganoLib.Crypto;
@@ -25,13 +28,15 @@ namespace SteganoLib.Payload
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
 
+            if (plaintext.Length > Array.MaxLength - Overhead)
+                throw new ArgumentOutOfRangeException(nameof(plaintext), "Sealed data exceeds the maximum byte array length.");
             var output = new byte[plaintext.Length + TagSize];
             plaintext.CopyTo(output);
             Tag(key, associatedData, plaintext, output.AsSpan(plaintext.Length));
             return output;
         }
 
-        public bool TryOpen(ReadOnlySpan<byte> sealedBody, ReadOnlySpan<byte> associatedData, StegoKey key, out byte[] plaintext)
+        public bool TryOpen(ReadOnlySpan<byte> sealedBody, ReadOnlySpan<byte> associatedData, StegoKey key, [NotNullWhen(true)] out byte[]? plaintext)
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));

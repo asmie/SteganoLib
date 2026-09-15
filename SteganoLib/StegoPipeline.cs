@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 using SteganoLib.Algorithms;
@@ -9,6 +11,9 @@ namespace SteganoLib
     /// <summary>
     /// Wraps an algorithm with a <see cref="PayloadEnvelope"/>: payloads are sealed
     /// before embedding and verified after extraction.
+    /// Algorithm and envelope objects are shared, not cloned. Keep their configuration
+    /// and carrier data stable during each operation. Concurrent use requires independent
+    /// carriers and thread-safe algorithm, selector, cost model and codec implementations.
     /// </summary>
     public sealed class StegoPipeline<TCarrier>
     {
@@ -38,6 +43,7 @@ namespace SteganoLib
             if (carrier == null)
                 throw new ArgumentNullException(nameof(carrier));
 
+            ArgumentNullException.ThrowIfNull(key);
             var sealedData = _envelope.Seal(data, key);
             if (!_algorithm.IsPossibleToEmbed(sealedData.Length, carrier))
                 throw new CapacityExceededException(sealedData.Length, _algorithm.Capacity(carrier));
@@ -50,7 +56,10 @@ namespace SteganoLib
             if (carrier == null)
                 throw new ArgumentNullException(nameof(carrier));
 
-            return _envelope.Open(_algorithm.ExtractBytes(carrier), key);
+            ArgumentNullException.ThrowIfNull(key);
+            var data = _algorithm.ExtractBytes(carrier)
+                ?? throw new InvalidOperationException("The algorithm returned null instead of a payload byte array.");
+            return _envelope.Open(data, key);
         }
 
         /// <summary>
