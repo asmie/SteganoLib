@@ -1,8 +1,12 @@
+#nullable enable
+
 namespace SteganoLib.Metadata
 {
     /// <summary>
     /// Where each container format keeps its entries. Sender and receiver must agree
     /// on these; the defaults are fine unless the cover already uses them.
+    /// Load validates the settings for the detected format. Later option changes do not
+    /// affect an already loaded store; do not change options concurrently with loading.
     /// </summary>
     public sealed class MetadataOptions
     {

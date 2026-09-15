@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -27,6 +29,7 @@ namespace SteganoLib.Metadata
         private const int MaxSegmentBody = 0xFFFF - 2;
 
         private readonly List<JpegSegment> _segments = new();
+        private readonly IReadOnlyList<JpegSegment> _segmentView;
         private readonly Dictionary<JpegSegment, int> _prefixCounts = new();
         private readonly byte[] _tail;
         private readonly byte[] _prefix;
@@ -41,6 +44,7 @@ namespace SteganoLib.Metadata
             Identifier = ValidateIdentifier(identifier);
             _prefix = Identifier.Length == 0 ? Array.Empty<byte>() : Encoding.ASCII.GetBytes(Identifier + "\0");
             _tail = Parse(jpeg);
+            _segmentView = _segments.AsReadOnly();
         }
 
         /// <summary>APPn marker number, 0 to 15.</summary>
@@ -52,8 +56,8 @@ namespace SteganoLib.Metadata
         /// <summary>Marker byte of the entry segments.</summary>
         public byte Marker => (byte)(JpegMarker.App0 + AppNumber);
 
-        /// <summary>Header segments before the first scan, in file order, entry segments included.</summary>
-        public IReadOnlyList<JpegSegment> Segments => _segments;
+        /// <summary>Live read-only collection of header segments before the first scan. Payload arrays remain editable; callers must preserve valid JPEG structure.</summary>
+        public IReadOnlyList<JpegSegment> Segments => _segmentView;
 
         public int MaxEntrySize => MaxSegmentBody - _prefix.Length;
 

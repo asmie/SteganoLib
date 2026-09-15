@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 namespace SteganoLib.Jpeg
@@ -13,7 +15,7 @@ namespace SteganoLib.Jpeg
 
         public byte Marker { get; }
 
-        /// <summary>Segment body without the marker and the two length bytes.</summary>
+        /// <summary>Mutable body without marker or length bytes, shared with the constructor's input array.</summary>
         public byte[] Payload { get; }
     }
 }

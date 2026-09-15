@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.IO;
 
@@ -11,10 +13,10 @@ namespace SteganoLib.Metadata
     }
 
     /// <summary>
-    /// A container file opened at the metadata level. The pixels or samples are never
-    /// touched, so the payload is invisible and inaudible but does not survive
-    /// re-encoding. <see cref="Load(byte[], MetadataOptions)"/> picks the store from the
-    /// file signature.
+    /// A container file opened at the metadata level. Embedding changes metadata without
+    /// decoding image or audio data; tools that strip metadata can remove the payload.
+    /// <see cref="Load(byte[], MetadataOptions)"/> picks the store from the file signature.
+    /// The supplied store is shared with this carrier; operations do not clone it.
     /// </summary>
     public sealed class MetadataCarrier
     {
@@ -36,7 +38,7 @@ namespace SteganoLib.Metadata
 
         /// <exception cref="NotSupportedException">The signature is not PNG, JPEG or RIFF WAVE.</exception>
         /// <exception cref="InvalidDataException">The file is recognised but corrupt.</exception>
-        public static MetadataCarrier Load(byte[] data, MetadataOptions options = null)
+        public static MetadataCarrier Load(byte[] data, MetadataOptions? options = null)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             options ??= new MetadataOptions();
@@ -51,13 +53,13 @@ namespace SteganoLib.Metadata
             return new MetadataCarrier(store);
         }
 
-        public static MetadataCarrier Load(string path, MetadataOptions options = null)
+        public static MetadataCarrier Load(string path, MetadataOptions? options = null)
         {
             if (path == null) throw new ArgumentNullException(nameof(path));
             return Load(File.ReadAllBytes(path), options);
         }
 
-        public static MetadataCarrier Load(Stream stream, MetadataOptions options = null)
+        public static MetadataCarrier Load(Stream stream, MetadataOptions? options = null)
         {
             if (stream == null) throw new ArgumentNullException(nameof(stream));
             using var buffer = new MemoryStream();

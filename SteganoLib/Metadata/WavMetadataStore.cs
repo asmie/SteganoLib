@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
@@ -25,6 +27,7 @@ namespace SteganoLib.Metadata
         private static readonly Encoding Ascii = Encoding.ASCII;
 
         private readonly List<RiffChunk> _chunks;
+        private readonly IReadOnlyList<RiffChunk> _chunkView;
 
         /// <exception cref="InvalidDataException">Invalid RIFF WAVE signature, chunk boundaries, padding or nested lists.</exception>
         public WavMetadataStore(byte[] wav, string chunkId = DefaultChunkId)
@@ -33,13 +36,14 @@ namespace SteganoLib.Metadata
 
             ChunkId = ValidateChunkId(chunkId);
             _chunks = Parse(wav);
+            _chunkView = _chunks.AsReadOnly();
         }
 
         /// <summary>Four-character id of the entry chunks.</summary>
         public string ChunkId { get; }
 
-        /// <summary>All chunks in file order, entry chunks included.</summary>
-        public IReadOnlyList<RiffChunk> Chunks => _chunks;
+        /// <summary>Live read-only collection of chunks. Payload arrays remain editable; callers must preserve valid RIFF structure.</summary>
+        public IReadOnlyList<RiffChunk> Chunks => _chunkView;
 
         public int MaxEntrySize => int.MaxValue;
 
@@ -69,7 +73,7 @@ namespace SteganoLib.Metadata
             foreach (var chunk in _chunks)
             {
                 if (chunk.Id == ChunkId)
-                    entries.Add(chunk.Payload);
+                    entries.Add((byte[])chunk.Payload.Clone());
             }
             return entries;
         }
@@ -83,7 +87,7 @@ namespace SteganoLib.Metadata
             {
                 if (entry == null)
                     throw new ArgumentException("Entries must not be null.", nameof(entries));
-                encoded.Add(new RiffChunk(ChunkId, entry));
+                encoded.Add(new RiffChunk(ChunkId, (byte[])entry.Clone()));
             }
 
             _chunks.RemoveAll(c => c.Id == ChunkId);

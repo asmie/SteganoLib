@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 namespace SteganoLib.Audio
@@ -7,7 +9,8 @@ namespace SteganoLib.Audio
     {
         public RiffChunk(string id, byte[] payload)
         {
-            if (id == null || id.Length != 4)
+            ArgumentNullException.ThrowIfNull(id);
+            if (id.Length != 4)
                 throw new ArgumentException("Chunk id must be four characters.", nameof(id));
 
             Id = id;
@@ -16,6 +19,7 @@ namespace SteganoLib.Audio
 
         public string Id { get; }
 
+        /// <summary>Mutable body, shared with the constructor's input array. This wrapper does not copy it.</summary>
         public byte[] Payload { get; }
     }
 }

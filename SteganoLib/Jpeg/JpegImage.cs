@@ -17,10 +17,10 @@ namespace SteganoLib.Jpeg
             Width = width;
             Height = height;
             FrameMarker = frameMarker;
-            Components = components;
+            Components = components.AsReadOnly();
             QuantizationTables = quantizationTables;
             RestartInterval = restartInterval;
-            Segments = segments;
+            Segments = segments.AsReadOnly();
         }
 
         public int Width { get; }
@@ -49,7 +49,7 @@ namespace SteganoLib.Jpeg
 
         private int _restartInterval;
 
-        /// <summary>APPn and COM segments in file order, written back verbatim.</summary>
+        /// <summary>Read-only collection of APPn and COM segments in file order. Payload arrays remain editable.</summary>
         public IReadOnlyList<JpegSegment> Segments { get; }
 
         /// <summary>Highest horizontal sampling factor across components.</summary>
@@ -117,6 +117,7 @@ namespace SteganoLib.Jpeg
             return output.ToArray();
         }
 
+        /// <summary>Copies coefficients, quantisation tables and metadata payloads so edits to the clone do not affect this image.</summary>
         public JpegImage Clone()
         {
             var components = new List<JpegComponent>(Components.Count);
@@ -127,7 +128,10 @@ namespace SteganoLib.Jpeg
             for (int i = 0; i < tables.Length; i++)
                 tables[i] = (ushort[])QuantizationTables[i]?.Clone();
 
-            return new JpegImage(Width, Height, FrameMarker, components, tables, RestartInterval, new List<JpegSegment>(Segments));
+            var segments = new List<JpegSegment>(Segments.Count);
+            foreach (var segment in Segments)
+                segments.Add(new JpegSegment(segment.Marker, (byte[])segment.Payload.Clone()));
+            return new JpegImage(Width, Height, FrameMarker, components, tables, RestartInterval, segments);
         }
     }
 }

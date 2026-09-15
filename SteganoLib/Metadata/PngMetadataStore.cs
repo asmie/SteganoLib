@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
@@ -30,6 +32,7 @@ namespace SteganoLib.Metadata
         private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         private readonly List<PngChunk> _chunks;
+        private readonly IReadOnlyList<PngChunk> _chunkView;
 
         /// <exception cref="InvalidDataException">Invalid PNG framing, image header, text structure or chunk CRC.</exception>
         public PngMetadataStore(byte[] png, string chunkType = DefaultChunkType, string keyword = DefaultKeyword)
@@ -39,6 +42,7 @@ namespace SteganoLib.Metadata
             ChunkType = ValidateChunkType(chunkType);
             Keyword = ValidateKeyword(keyword);
             _chunks = Parse(png);
+            _chunkView = _chunks.AsReadOnly();
         }
 
         /// <summary>Type of the chunks that carry entries.</summary>
@@ -50,8 +54,8 @@ namespace SteganoLib.Metadata
         /// <summary>Whether entries are written as Base64 text under <see cref="Keyword"/>.</summary>
         public bool IsTextChunk => IsTextType(ChunkType);
 
-        /// <summary>All chunks in file order, including the entry chunks.</summary>
-        public IReadOnlyList<PngChunk> Chunks => _chunks;
+        /// <summary>Live read-only collection of chunks. Their body arrays remain editable; callers must preserve valid PNG structure.</summary>
+        public IReadOnlyList<PngChunk> Chunks => _chunkView;
 
         public int MaxEntrySize
         {
@@ -295,7 +299,7 @@ namespace SteganoLib.Metadata
         private PngChunk Encode(byte[] payload)
         {
             if (!IsTextChunk)
-                return new PngChunk(ChunkType, payload);
+                return new PngChunk(ChunkType, (byte[])payload.Clone());
 
             var text = Encoding.ASCII.GetBytes(Convert.ToBase64String(payload));
             using var body = new MemoryStream();
@@ -322,10 +326,10 @@ namespace SteganoLib.Metadata
         }
 
         /// <summary>Payload of an entry chunk, or <c>null</c> when a text chunk under our keyword is not ours after all.</summary>
-        private byte[] Decode(PngChunk chunk)
+        private byte[]? Decode(PngChunk chunk)
         {
             if (!IsTextChunk)
-                return chunk.Data;
+                return (byte[])chunk.Data.Clone();
 
             int offset = ValidateText(chunk.Type, chunk.Data);
             var body = chunk.Data.AsSpan(offset);

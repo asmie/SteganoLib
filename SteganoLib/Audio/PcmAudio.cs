@@ -39,7 +39,7 @@ namespace SteganoLib.Audio
             Channels = channels;
             BitsPerSample = bitsPerSample;
             Samples = samples;
-            ExtraChunks = extraChunks;
+            ExtraChunks = extraChunks.AsReadOnly();
             MinValue = bitsPerSample == 32 ? int.MinValue : -(1 << (bitsPerSample - 1));
             MaxValue = bitsPerSample == 32 ? int.MaxValue : (1 << (bitsPerSample - 1)) - 1;
         }
@@ -50,7 +50,7 @@ namespace SteganoLib.Audio
 
         public int BitsPerSample { get; }
 
-        /// <summary>Interleaved samples: frame 0 channel 0, frame 0 channel 1, frame 1 channel 0, ...</summary>
+        /// <summary>Mutable interleaved samples, shared with the constructor's input array. Use Clone for independent samples and metadata.</summary>
         public int[] Samples { get; }
 
         public int FrameCount => Samples.Length / Channels;
@@ -61,7 +61,7 @@ namespace SteganoLib.Audio
 
         public TimeSpan Duration => TimeSpan.FromSeconds((double)FrameCount / SampleRate);
 
-        /// <summary>Chunks other than fmt and data, written back before the data chunk.</summary>
+        /// <summary>Read-only collection of chunks written before data. Chunk payload arrays remain editable.</summary>
         public IReadOnlyList<RiffChunk> ExtraChunks { get; }
 
         public int Sample(int frame, int channel) => Samples[frame * Channels + channel];
@@ -103,7 +103,14 @@ namespace SteganoLib.Audio
 
         public byte[] ToArray() => WaveWriter.Write(this);
 
-        public PcmAudio Clone() => new(SampleRate, Channels, BitsPerSample, (int[])Samples.Clone(), new List<RiffChunk>(ExtraChunks));
+        /// <summary>Copies samples and metadata payloads so edits to the clone do not affect this audio.</summary>
+        public PcmAudio Clone()
+        {
+            var chunks = new List<RiffChunk>(ExtraChunks.Count);
+            foreach (var chunk in ExtraChunks)
+                chunks.Add(new RiffChunk(chunk.Id, (byte[])chunk.Payload.Clone()));
+            return new PcmAudio(SampleRate, Channels, BitsPerSample, (int[])Samples.Clone(), chunks);
+        }
 
         private static class WaveReader
         {

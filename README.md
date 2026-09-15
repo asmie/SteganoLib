@@ -105,6 +105,14 @@ Envelope and pipeline APIs now carry nullable annotations. `ExtractResult.Data` 
 
 The existing envelope format is unchanged. Unknown flags on an authenticated envelope produce `Unsupported`; changing flags without a valid authentication tag still produces `AuthenticationFailed`. Keep algorithm, envelope and codec configuration stable during operations. Concurrent use requires independent carriers and thread-safe dependencies. Configurable extraction limits and complete compressed-stream validation remain planned work.
 
+## Metadata and carrier ownership
+
+`IMetadataStore.WriteEntries` copies entry buffers, and `ReadEntries` returns independent copies. This contract now applies consistently to PNG, JPEG and WAV; editing an input buffer or an extracted entry does not change the store. Invalid entry lists leave existing entries intact. Custom stores must follow the same ownership and failure contracts.
+
+Chunk and segment collections are read-only views; metadata-store views reflect later `WriteEntries` calls. Their low-level body arrays remain editable for compatibility, and callers must keep those edits valid for the container format. Use `WriteEntries` for payload replacement. Standalone `PngChunk`, `RiffChunk` and `JpegSegment` objects retain their constructor arrays without copying them. Metadata helpers and stores now have nullable annotations, and helpers reject null payloads or keys before reading input.
+
+`PcmAudio.Clone()` and `JpegImage.Clone()` now copy metadata payloads as well as samples, coefficients and quantisation tables. Editing cloned metadata no longer changes the original. `PcmAudio` still shares the sample array passed to its constructor; use `Clone()` when an independent copy is needed. Synchronise access to mutable carriers and stores when sharing them between threads.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with
