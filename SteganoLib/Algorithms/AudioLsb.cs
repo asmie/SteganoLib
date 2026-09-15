@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 
@@ -14,12 +16,21 @@ namespace SteganoLib.Algorithms
     /// (matching); with more bits the low bits are replaced. The same 6-byte header and
     /// optional <see cref="TrellisCoder"/> as the image <see cref="LSB"/> apply.
     /// </summary>
+    /// <remarks>
+    /// Configure before use. Settings and dependency references are captured for each operation;
+    /// callbacks cannot replace the active configuration. Dependency objects remain shared and
+    /// must keep their own configuration stable. Concurrent setting changes require external synchronisation.
+    /// </remarks>
     public sealed class AudioLsb : IStegAlgorithm<PcmAudio>
     {
         private readonly ISampleSelector _selector;
         private int _bitsPerSample = 1;
         private int _maxTrellisWidth = 64;
         private ISampleCostModel _costModel = new AmplitudeCostModel();
+
+        private readonly record struct Settings(int BitsPerSample, SyndromeTrellisCoder? Coder, int MaxWidth, ISampleCostModel CostModel);
+
+        private Settings CaptureSettings() => new(_bitsPerSample, TrellisCoder, _maxTrellisWidth, _costModel);
 
         public AudioLsb(ISampleSelector selector)
         {
@@ -34,7 +45,8 @@ namespace SteganoLib.Algorithms
             if (audio == null)
                 throw new ArgumentNullException(nameof(audio));
 
-            SlotEmbedding.Embed(new Carrier(this, audio), data, TrellisCoder, _maxTrellisWidth);
+            var carrier = new Carrier(this, audio);
+            SlotEmbedding.Embed(carrier, data, carrier.Configuration.Coder, carrier.Configuration.MaxWidth);
         }
 
         /// <inheritdoc />
@@ -55,15 +67,15 @@ namespace SteganoLib.Algorithms
             if (audio == null)
                 throw new ArgumentNullException(nameof(audio));
 
-            return SlotEmbedding.Capacity(TotalSlots(audio));
+            return SlotEmbedding.Capacity(TotalSlots(audio, _bitsPerSample));
         }
 
-        private long TotalSlots(PcmAudio audio)
+        private long TotalSlots(PcmAudio audio, int bitsPerSample)
         {
             long count = _selector.Count(audio.Samples.Length);
             if (count < 0 || count > audio.Samples.Length)
                 throw new InvalidOperationException("The selector count must be between zero and the audio's sample count.");
-            return count * _bitsPerSample;
+            return count * bitsPerSample;
         }
 
         /// <summary>Low bits used in each sample, 1 to 4. Default 1.</summary>
@@ -81,7 +93,7 @@ namespace SteganoLib.Algorithms
         public ISampleSelector SampleSelector => _selector;
 
         /// <summary>Syndrome-trellis coder for the payload; <c>null</c> (default) writes bits directly.</summary>
-        public SyndromeTrellisCoder TrellisCoder { get; set; }
+        public SyndromeTrellisCoder? TrellisCoder { get; set; }
 
         /// <summary>Cost of changing a sample, consulted only when <see cref="TrellisCoder"/> is set. Default <see cref="AmplitudeCostModel"/>.</summary>
         public ISampleCostModel CostModel
@@ -109,17 +121,22 @@ namespace SteganoLib.Algorithms
 
             public Carrier(AudioLsb owner, PcmAudio audio)
             {
+                Configuration = owner.CaptureSettings();
                 _owner = owner;
                 _audio = audio;
             }
 
-            public override long TotalSlots() => _owner.TotalSlots(_audio);
+            public Settings Configuration { get; }
+
+            public override long TotalSlots() => _owner.TotalSlots(_audio, Configuration.BitsPerSample);
 
             public override IEnumerable<(long Index, int Bit)> Slots()
             {
-                int bits = _owner._bitsPerSample;
+                int bits = Configuration.BitsPerSample;
                 foreach (long index in _owner._selector.Indices(_audio.Samples.Length))
                 {
+                    if (index < 0 || index >= _audio.Samples.Length)
+                        throw new InvalidOperationException("The sample selector returned an index outside the audio buffer.");
                     for (int b = 0; b < bits; b++)
                         yield return (index, b);
                 }
@@ -133,7 +150,7 @@ namespace SteganoLib.Algorithms
                 if (((value >> slot.Bit) & 1) == (bit ? 1 : 0))
                     return;
 
-                if (_owner._bitsPerSample == 1)
+                if (Configuration.BitsPerSample == 1)
                 {
                     bool canUp = value < _audio.MaxValue;
                     bool canDown = value > _audio.MinValue;
@@ -150,7 +167,7 @@ namespace SteganoLib.Algorithms
                 _audio.Samples[slot.Index] = value;
             }
 
-            public override double Cost((long Index, int Bit) slot) => _owner._costModel.Cost(_audio, slot.Index);
+            public override double Cost((long Index, int Bit) slot) => Configuration.CostModel.Cost(_audio, slot.Index);
         }
     }
 }

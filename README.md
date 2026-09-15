@@ -113,6 +113,12 @@ Chunk and segment collections are read-only views; metadata-store views reflect 
 
 `PcmAudio.Clone()` and `JpegImage.Clone()` now copy metadata payloads as well as samples, coefficients and quantisation tables. Editing cloned metadata no longer changes the original. `PcmAudio` still shares the sample array passed to its constructor; use `Clone()` when an independent copy is needed. Synchronise access to mutable carriers and stores when sharing them between threads.
 
+## Algorithm configuration
+
+Image LSB and audio LSB capture channel/bit settings, embedding mode where applicable, trellis settings and cost-model references before invoking selectors or cost models. F5 captures its trellis coder, width and cost-model reference before embedding. Changing those properties inside a callback affects later operations; the active operation continues with its initial settings. Nullable annotations now describe optional trellis coders explicitly.
+
+Configure algorithms before use and synchronise concurrent configuration changes externally. Selectors and cost models remain shared objects: their own configuration and the carrier data must stay stable during an operation. Pixel and sample indices are checked when visited, so invalid coordinates raise `InvalidOperationException` before accessing that position. Selectors must still provide finite, repeatable sequences with valid counts and no duplicates. Invalid image LSB embedding-mode values are rejected at assignment.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

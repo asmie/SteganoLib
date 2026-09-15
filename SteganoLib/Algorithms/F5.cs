@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -21,6 +23,11 @@ namespace SteganoLib.Algorithms
     /// never changed, so there is no shrinkage in the payload.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Configure before use. Settings and dependency references are captured for each operation;
+    /// callbacks cannot replace the active configuration. Dependency objects remain shared and
+    /// must keep their own configuration stable. Concurrent setting changes require external synchronisation.
+    /// </remarks>
     public sealed class F5 : IStegAlgorithm<JpegImage>
     {
         private const string Purpose = "SteganoLib/f5-permutation/v1";
@@ -54,7 +61,7 @@ namespace SteganoLib.Algorithms
         }
 
         /// <summary>Syndrome-trellis coder for the payload; <c>null</c> (default) uses F5 matrix encoding.</summary>
-        public SyndromeTrellisCoder TrellisCoder { get; set; }
+        public SyndromeTrellisCoder? TrellisCoder { get; set; }
 
         /// <summary>Cost of changing a coefficient, consulted only when <see cref="TrellisCoder"/> is set. Default <see cref="MagnitudeCostModel"/>.</summary>
         public ICoefficientCostModel CostModel
@@ -83,6 +90,9 @@ namespace SteganoLib.Algorithms
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
+            var coder = TrellisCoder;
+            int maxWidth = _maxTrellisWidth;
+            var costModel = _costModel;
             long capacity = Capacity(image);
             if (data.Length > capacity)
                 throw new CapacityExceededException(data.Length, capacity);
@@ -93,10 +103,10 @@ namespace SteganoLib.Algorithms
                 return;
 
             var arrays = Arrays(image);
-            if (TrellisCoder != null)
+            if (coder != null)
             {
                 var work = CloneAll(arrays);
-                if (!TryEmbedWithTrellis(work, image, data))
+                if (!TryEmbedWithTrellis(work, image, data, coder, maxWidth, costModel))
                     throw new CapacityExceededException(data.Length, capacity);
                 CopyAll(work, arrays);
                 return;
@@ -238,7 +248,7 @@ namespace SteganoLib.Algorithms
                 && WriteBits(refs, k, new BitArray(data));
         }
 
-        private bool TryEmbedWithTrellis(short[][] work, JpegImage image, byte[] data)
+        private bool TryEmbedWithTrellis(short[][] work, JpegImage image, byte[] data, SyndromeTrellisCoder coder, int maxWidth, ICoefficientCostModel costModel)
         {
             long messageBits = (long)data.Length * 8;
 
@@ -247,12 +257,12 @@ namespace SteganoLib.Algorithms
             // shrinkage, while avoiding a second header reservation on covers without ones.
             var (nonZero, ones) = CountNonZero(work);
             long available = nonZero - ones - HeaderBits;
-            int width = messageBits == 0 ? 1 : (int)Math.Min(_maxTrellisWidth, available / Math.Max(1, messageBits));
+            int width = messageBits == 0 ? 1 : (int)Math.Min(maxWidth, available / Math.Max(1, messageBits));
             if (width < 1)
                 return false;
 
             using var refs = NonZero(work, image).GetEnumerator();
-            if (!WriteBits(refs, 1, new BitArray(Header(1, TrellisCoder.ConstraintHeight, width, data.Length))))
+            if (!WriteBits(refs, 1, new BitArray(Header(1, coder.ConstraintHeight, width, data.Length))))
                 return false;
 
             long coverBits = messageBits * width;
@@ -270,7 +280,7 @@ namespace SteganoLib.Algorithms
                 // so magnitude-one coefficients are forbidden regardless of custom costs.
                 costs[i] = value == 1 || value == -1
                     ? double.PositiveInfinity
-                    : _costModel.Cost(value, positions[i].Index % 64);
+                    : costModel.Cost(value, positions[i].Index % 64);
             }
 
             var message = new bool[messageBits];
@@ -279,7 +289,7 @@ namespace SteganoLib.Algorithms
                 message[i] = payload[i];
 
             var stego = new bool[coverBits];
-            if (double.IsPositiveInfinity(TrellisCoder.Embed(cover, costs, message, stego)))
+            if (double.IsPositiveInfinity(coder.Embed(cover, costs, message, stego)))
                 return false;
 
             for (long i = 0; i < coverBits; i++)

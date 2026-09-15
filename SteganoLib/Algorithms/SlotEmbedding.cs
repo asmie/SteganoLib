@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -33,7 +35,7 @@ namespace SteganoLib.Algorithms
 
         public static long Capacity(long totalSlots) => Math.Max(0, totalSlots / 8 - HeaderSize);
 
-        public static void Embed<TSlot>(SlotCarrier<TSlot> carrier, byte[] data, SyndromeTrellisCoder coder, int maxTrellisWidth)
+        public static void Embed<TSlot>(SlotCarrier<TSlot> carrier, byte[] data, SyndromeTrellisCoder? coder, int maxTrellisWidth)
         {
             long totalSlots = carrier.TotalSlots();
             long capacity = Capacity(totalSlots);

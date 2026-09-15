@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -33,6 +35,11 @@ namespace SteganoLib.Algorithms
     /// is small. The header is still written plainly so the receiver can size the code.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Configure before use. Settings and dependency references are captured for each operation;
+    /// callbacks cannot replace the active configuration. Dependency objects remain shared and
+    /// must keep their own configuration stable. Concurrent setting changes require external synchronisation.
+    /// </remarks>
     public class LSB : IStegAlgorithm<Image<Rgba32>>
     {
         private readonly IPixelSelector _selector;
@@ -40,6 +47,12 @@ namespace SteganoLib.Algorithms
         private int _bitsPerPixel = 1;
         private int _maxTrellisWidth = 64;
         private IPixelCostModel _costModel = new TextureCostModel();
+        private LsbEmbeddingMode _embeddingMode = LsbEmbeddingMode.Match;
+
+        private readonly record struct Settings(ColorChannels Channels, int BitsPerPixel, LsbEmbeddingMode Mode,
+            SyndromeTrellisCoder? Coder, int MaxWidth, IPixelCostModel CostModel);
+
+        private Settings CaptureSettings() => new(_channels, _bitsPerPixel, _embeddingMode, TrellisCoder, _maxTrellisWidth, _costModel);
 
         public LSB(IPixelSelector selector)
         {
@@ -55,7 +68,7 @@ namespace SteganoLib.Algorithms
                 throw new ArgumentNullException(nameof(image));
 
             var carrier = new Carrier(this, image);
-            SlotEmbedding.Embed(carrier, data, TrellisCoder, _maxTrellisWidth);
+            SlotEmbedding.Embed(carrier, data, carrier.Configuration.Coder, carrier.Configuration.MaxWidth);
             carrier.Commit();
         }
 
@@ -78,7 +91,7 @@ namespace SteganoLib.Algorithms
             if (image == null)
                 throw new ArgumentNullException(nameof(image));
 
-            return SlotEmbedding.Capacity(TotalSlots(image));
+            return SlotEmbedding.Capacity(TotalSlots(image, CaptureSettings()));
         }
 
         /// <summary>Channels that may carry bits. Default <see cref="ColorChannels.All"/>.</summary>
@@ -111,13 +124,22 @@ namespace SteganoLib.Algorithms
         }
 
         /// <summary>How a channel value is changed when its LSB does not match. Default <see cref="LsbEmbeddingMode.Match"/>.</summary>
-        public LsbEmbeddingMode EmbeddingMode { get; set; } = LsbEmbeddingMode.Match;
+        public LsbEmbeddingMode EmbeddingMode
+        {
+            get => _embeddingMode;
+            set
+            {
+                if (value is not (LsbEmbeddingMode.Match or LsbEmbeddingMode.Replace))
+                    throw new ArgumentOutOfRangeException(nameof(value));
+                _embeddingMode = value;
+            }
+        }
 
         /// <summary>Selector that decides the pixel order.</summary>
         public IPixelSelector PixelSelector => _selector;
 
         /// <summary>Syndrome-trellis coder for the payload; <c>null</c> (default) writes bits directly.</summary>
-        public SyndromeTrellisCoder TrellisCoder { get; set; }
+        public SyndromeTrellisCoder? TrellisCoder { get; set; }
 
         /// <summary>Cost of changing a slot, consulted only when <see cref="TrellisCoder"/> is set. Default <see cref="TextureCostModel"/>.</summary>
         public IPixelCostModel CostModel
@@ -141,18 +163,16 @@ namespace SteganoLib.Algorithms
             }
         }
 
-        private int ChannelCount => BitOperations.PopCount((uint)_channels);
-
         // Number of bit slots the selector and channel settings expose for this image.
-        private long TotalSlots(Image<Rgba32> image)
+        private long TotalSlots(Image<Rgba32> image, Settings settings)
         {
             long pixels = _selector is IContentAwarePixelSelector aware
                 ? aware.Count(image)
                 : _selector.Count(image.Width, image.Height);
             if (pixels < 0 || pixels > (long)image.Width * image.Height)
                 throw new InvalidOperationException("The selector count must be between zero and the image's pixel count.");
-            int channels = ChannelCount;
-            int perPixel = Math.Min(_bitsPerPixel, channels);
+            int channels = BitOperations.PopCount((uint)settings.Channels);
+            int perPixel = Math.Min(settings.BitsPerPixel, channels);
 
             // A cycle spreads one bit per enabled channel over ceil(channels / perPixel) pixels.
             long pixelsPerCycle = (channels + perPixel - 1) / perPixel;
@@ -167,10 +187,11 @@ namespace SteganoLib.Algorithms
             if (_selector is not IContentAwarePixelSelector aware)
                 return 8;
 
-            if (aware.StableHighBits < 1 || aware.StableHighBits > 7)
+            int stableBits = aware.StableHighBits;
+            if (stableBits < 1 || stableBits > 7)
                 throw new InvalidOperationException("StableHighBits must be between 1 and 7.");
 
-            return 8 - aware.StableHighBits;
+            return 8 - stableBits;
         }
 
         private IEnumerable<Point> PixelsOf(Image<Rgba32> image)
@@ -182,18 +203,20 @@ namespace SteganoLib.Algorithms
 
         // One slot per bit: a pixel and the channel index (0 = R, 1 = G, 2 = B).
         // Channels rotate across pixels so a cycle of C bits is spread over ceil(C / M) pixels.
-        private IEnumerable<(int X, int Y, int Channel)> Slots(Image<Rgba32> image)
+        private IEnumerable<(int X, int Y, int Channel)> Slots(Image<Rgba32> image, Settings settings)
         {
             var channels = new List<int>(3);
-            if (_channels.HasFlag(ColorChannels.Red)) channels.Add(0);
-            if (_channels.HasFlag(ColorChannels.Green)) channels.Add(1);
-            if (_channels.HasFlag(ColorChannels.Blue)) channels.Add(2);
+            if (settings.Channels.HasFlag(ColorChannels.Red)) channels.Add(0);
+            if (settings.Channels.HasFlag(ColorChannels.Green)) channels.Add(1);
+            if (settings.Channels.HasFlag(ColorChannels.Blue)) channels.Add(2);
 
-            int perPixel = Math.Min(_bitsPerPixel, channels.Count);
+            int perPixel = Math.Min(settings.BitsPerPixel, channels.Count);
             int next = 0;
 
             foreach (var p in PixelsOf(image))
             {
+                if ((uint)p.X >= (uint)image.Width || (uint)p.Y >= (uint)image.Height)
+                    throw new InvalidOperationException("The pixel selector returned a coordinate outside the image.");
                 int written = 0;
                 while (next < channels.Count && written < perPixel)
                 {
@@ -209,12 +232,12 @@ namespace SteganoLib.Algorithms
 
         // Moves by one in the requested direction unless that would leave the range,
         // or change the high bits a content-aware selector depends on.
-        private byte Adjust(byte value, bool bit, bool up, int stableShift)
+        private static byte Adjust(byte value, bool bit, bool up, int stableShift, LsbEmbeddingMode mode)
         {
             if (((value & 1) == 1) == bit)
                 return value;
 
-            if (EmbeddingMode == LsbEmbeddingMode.Replace)
+            if (mode == LsbEmbeddingMode.Replace)
                 return (byte)(bit ? (value | 1) : (value & 0xFE));
 
             bool canUp = value < 255 && ((value + 1) >> stableShift) == (value >> stableShift);
@@ -236,20 +259,23 @@ namespace SteganoLib.Algorithms
             // image (channel index = byte offset within a pixel), and the rows are written
             // back once in Commit. Going through the image indexer twice per slot cost
             // more than the embedding itself.
-            private byte[] _pixels;
+            private byte[]? _pixels;
             private bool _dirty;
 
             public Carrier(LSB owner, Image<Rgba32> image)
             {
+                Configuration = owner.CaptureSettings();
                 _owner = owner;
                 _image = image;
                 _stableShift = owner.StableShift();
                 _width = image.Width;
             }
 
-            public override long TotalSlots() => _owner.TotalSlots(_image);
+            public Settings Configuration { get; }
 
-            public override IEnumerable<(int X, int Y, int Channel)> Slots() => _owner.Slots(_image);
+            public override long TotalSlots() => _owner.TotalSlots(_image, Configuration);
+
+            public override IEnumerable<(int X, int Y, int Channel)> Slots() => _owner.Slots(_image, Configuration);
 
             public override bool Read((int X, int Y, int Channel) slot)
             {
@@ -260,7 +286,7 @@ namespace SteganoLib.Algorithms
             {
                 var pixels = Pixels();
                 int offset = Offset(slot);
-                byte adjusted = _owner.Adjust(pixels[offset], bit, up, _stableShift);
+                byte adjusted = Adjust(pixels[offset], bit, up, _stableShift, Configuration.Mode);
                 if (adjusted == pixels[offset])
                     return;
                 pixels[offset] = adjusted;
@@ -295,7 +321,7 @@ namespace SteganoLib.Algorithms
 
             private int Offset((int X, int Y, int Channel) slot) => (slot.Y * _width + slot.X) * 4 + slot.Channel;
 
-            public override double Cost((int X, int Y, int Channel) slot) => _owner._costModel.Cost(_image, slot.X, slot.Y, slot.Channel);
+            public override double Cost((int X, int Y, int Channel) slot) => Configuration.CostModel.Cost(_image, slot.X, slot.Y, slot.Channel);
         }
     }
 }
