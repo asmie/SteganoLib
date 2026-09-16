@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 
@@ -16,6 +18,7 @@ namespace SteganoLib.Sharing
         public static void EmbedBytes(this IStegAlgorithm<IReadOnlyList<Image<Rgba32>>> algorithm, byte[] data, IReadOnlyList<string> inputPaths, IReadOnlyList<string> outputPaths)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
+            ArgumentNullException.ThrowIfNull(data);
             ValidateOutputs(inputPaths, outputPaths);
             var images = Load(inputPaths, outputPaths);
             try
@@ -47,6 +50,8 @@ namespace SteganoLib.Sharing
         public static void Embed(this StegoPipeline<IReadOnlyList<Image<Rgba32>>> pipeline, byte[] data, IReadOnlyList<string> inputPaths, IReadOnlyList<string> outputPaths, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(data);
+            ArgumentNullException.ThrowIfNull(key);
             ValidateOutputs(inputPaths, outputPaths);
             var images = Load(inputPaths, outputPaths);
             try
@@ -63,6 +68,7 @@ namespace SteganoLib.Sharing
         public static ExtractResult Extract(this StegoPipeline<IReadOnlyList<Image<Rgba32>>> pipeline, IReadOnlyList<string> paths, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(key);
             var images = Load(paths, null);
             try
             {
@@ -74,7 +80,7 @@ namespace SteganoLib.Sharing
             }
         }
 
-        private static List<Image<Rgba32>> Load(IReadOnlyList<string> inputPaths, IReadOnlyList<string> outputPaths)
+        private static List<Image<Rgba32>> Load(IReadOnlyList<string> inputPaths, IReadOnlyList<string>? outputPaths)
         {
             if (inputPaths == null) throw new ArgumentNullException(nameof(inputPaths));
             if (outputPaths != null && outputPaths.Count != inputPaths.Count)

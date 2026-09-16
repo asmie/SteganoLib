@@ -113,6 +113,12 @@ Chunk and segment collections are read-only views; metadata-store views reflect 
 
 `PcmAudio.Clone()` and `JpegImage.Clone()` now copy metadata payloads as well as samples, coefficients and quantisation tables. Editing cloned metadata no longer changes the original. `PcmAudio` still shares the sample array passed to its constructor; use `Clone()` when an independent copy is needed. Synchronise access to mutable carriers and stores when sharing them between threads.
 
+`Share` copies public constructor input, and parsing and serialisation use independent buffers. Its `Data` array remains editable; keep it stable while combining or serialising shares. `ShamirSecretSharing.Split` returns a read-only collection of independently owned shares. Sharing APIs now have nullable annotations: `Share.TryParse` accepts null and returns null for invalid input, while `Share.FromBytes` rejects null with `ArgumentNullException`.
+
+`SharedCoding` requires distinct carrier objects for embedding. Repeated references raise `ArgumentException`; capacity is zero and feasibility checks return false. Distinct objects that share underlying storage also need independent copies before embedding. Extraction still accepts repeated carriers and counts each share index once. Null extracted arrays and negative capacities from the inner algorithm raise `InvalidOperationException`.
+
+Shared embedding checks all capacities before writing and then processes carriers in order. If the inner algorithm fails, earlier carriers may already contain shares, the failing carrier follows that algorithm's failure contract, and later carriers remain untouched. Keep the carrier list, carrier data and inner configuration stable during operations. Sharing file helpers reject null payloads and keys before opening input files.
+
 ## Algorithm configuration
 
 Image LSB and audio LSB capture channel/bit settings, embedding mode where applicable, trellis settings and cost-model references before invoking selectors or cost models. F5 captures its trellis coder, width and cost-model reference before embedding. Changing those properties inside a callback affects later operations; the active operation continues with its initial settings. Nullable annotations now describe optional trellis coders explicitly.

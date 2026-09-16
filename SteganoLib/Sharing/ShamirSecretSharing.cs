@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
@@ -55,8 +57,8 @@ namespace SteganoLib.Sharing
 
             var result = new List<Share>(ShareCount);
             for (int i = 0; i < ShareCount; i++)
-                result.Add(new Share(Threshold, i + 1, shares[i]));
-            return result;
+                result.Add(Share.FromOwnedData(Threshold, i + 1, shares[i]));
+            return result.AsReadOnly();
         }
 
         /// <summary>
@@ -64,11 +66,12 @@ namespace SteganoLib.Sharing
         /// Extra shares are used too; a share from a different split or a corrupted share
         /// produces wrong bytes without warning, so authenticate the secret separately.
         /// </summary>
-        /// <exception cref="ArgumentException">Too few shares, or shares that do not belong together.</exception>
+        /// <exception cref="ArgumentException">Invalid share count, null shares, duplicate indices, or inconsistent lengths or thresholds.</exception>
         public static byte[] Combine(IReadOnlyList<Share> shares)
         {
             if (shares == null) throw new ArgumentNullException(nameof(shares));
             if (shares.Count == 0) throw new ArgumentException("At least one share is required.", nameof(shares));
+            if (shares.Count > 255) throw new ArgumentException("At most 255 distinct shares are supported.", nameof(shares));
 
             var first = shares[0] ?? throw new ArgumentException("Shares must not be null.", nameof(shares));
             int threshold = first.Threshold;

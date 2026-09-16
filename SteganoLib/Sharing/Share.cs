@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 namespace SteganoLib.Sharing
@@ -8,14 +10,23 @@ namespace SteganoLib.Sharing
         public const int HeaderSize = 2;
 
         public Share(int threshold, int index, byte[] data)
+            : this(threshold, index, data, takeOwnership: false)
+        {
+        }
+
+        private Share(int threshold, int index, byte[] data, bool takeOwnership)
         {
             if (threshold < 1 || threshold > 255) throw new ArgumentOutOfRangeException(nameof(threshold));
             if (index < 1 || index > 255) throw new ArgumentOutOfRangeException(nameof(index), "Share index must be 1 to 255.");
 
             Threshold = threshold;
             Index = index;
-            Data = data ?? throw new ArgumentNullException(nameof(data));
+            ArgumentNullException.ThrowIfNull(data);
+            Data = takeOwnership ? data : (byte[])data.Clone();
         }
+
+        // For fresh buffers created by splitting/parsing; they have no external owner.
+        internal static Share FromOwnedData(int threshold, int index, byte[] data) => new(threshold, index, data, takeOwnership: true);
 
         /// <summary>Shares needed to recover the secret.</summary>
         public int Threshold { get; }
@@ -23,12 +34,14 @@ namespace SteganoLib.Sharing
         /// <summary>Evaluation point, 1 to 255; distinct for every share of one split.</summary>
         public int Index { get; }
 
-        /// <summary>Same length as the secret.</summary>
+        /// <summary>Mutable share bytes, copied from public constructor input. Do not edit while combining or serialising shares.</summary>
         public byte[] Data { get; }
 
         /// <summary>Threshold, index, then the share bytes.</summary>
         public byte[] ToBytes()
         {
+            if (Data.Length > Array.MaxLength - HeaderSize)
+                throw new InvalidOperationException("Serialised share exceeds the maximum byte array length.");
             var bytes = new byte[HeaderSize + Data.Length];
             bytes[0] = (byte)Threshold;
             bytes[1] = (byte)Index;
@@ -37,15 +50,16 @@ namespace SteganoLib.Sharing
         }
 
         /// <summary>Parse a share; null when the bytes cannot be one.</summary>
-        public static Share TryParse(byte[] bytes)
+        public static Share? TryParse(byte[]? bytes)
         {
             if (bytes == null || bytes.Length < HeaderSize || bytes[0] < 1 || bytes[1] < 1)
                 return null;
-            return new Share(bytes[0], bytes[1], bytes.AsSpan(HeaderSize).ToArray());
+            return FromOwnedData(bytes[0], bytes[1], bytes.AsSpan(HeaderSize).ToArray());
         }
 
         public static Share FromBytes(byte[] bytes)
         {
+            ArgumentNullException.ThrowIfNull(bytes);
             return TryParse(bytes) ?? throw new ArgumentException("Not a share: too short or zero threshold or index.", nameof(bytes));
         }
     }

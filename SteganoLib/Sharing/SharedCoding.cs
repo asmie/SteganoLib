@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 
@@ -12,6 +14,8 @@ namespace SteganoLib.Sharing
     /// algorithm. Extraction accepts any subset of the carriers, in any order; carriers that
     /// hold no share are skipped. Wrap it in a <see cref="StegoPipeline{TCarrier}"/> so a
     /// wrong or corrupted share is caught by the envelope instead of yielding garbage.
+    /// Carrier objects and the inner algorithm are shared. Keep their configuration and
+    /// the carrier list stable during operations; distinct embedding targets must not share storage.
     /// </summary>
     public sealed class SharedCoding<TCarrier> : IStegAlgorithm<IReadOnlyList<TCarrier>>
     {
@@ -29,13 +33,20 @@ namespace SteganoLib.Sharing
         /// <summary>Carriers needed to recover the payload.</summary>
         public int Threshold { get; }
 
-        /// <exception cref="ArgumentException">Fewer carriers than the threshold, or more than 255.</exception>
+        /// <summary>
+        /// Checks every carrier's capacity before writing, then embeds in list order.
+        /// If the inner algorithm fails, earlier carriers may already contain shares;
+        /// the failing carrier follows the inner algorithm's failure contract and later carriers are untouched.
+        /// </summary>
+        /// <exception cref="ArgumentException">Invalid carrier count, null carriers or repeated carrier references.</exception>
         public void EmbedBytes(byte[] data, IReadOnlyList<TCarrier> carriers)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             Validate(carriers);
             if (carriers.Count < Threshold)
                 throw new ArgumentException($"At least {Threshold} carriers are needed, {carriers.Count} given.", nameof(carriers));
+            if (HasRepeatedReferences(carriers))
+                throw new ArgumentException("Embedding requires distinct carrier objects.", nameof(carriers));
 
             long capacity = Capacity(carriers);
             if (!IsPossibleToEmbed(data.Length, carriers))
@@ -55,7 +66,9 @@ namespace SteganoLib.Sharing
             var indices = new HashSet<int>();
             foreach (var carrier in carriers)
             {
-                var share = Share.TryParse(Inner.ExtractBytes(carrier));
+                var bytes = Inner.ExtractBytes(carrier)
+                    ?? throw new InvalidOperationException("The inner algorithm returned null instead of a payload byte array.");
+                var share = Share.TryParse(bytes);
                 if (share == null || share.Threshold != Threshold)
                     continue;
                 if (shares.Count > 0 && share.Data.Length != shares[0].Data.Length)
@@ -71,7 +84,7 @@ namespace SteganoLib.Sharing
         public bool IsPossibleToEmbed(long dataLength, IReadOnlyList<TCarrier> carriers)
         {
             Validate(carriers);
-            if (carriers.Count < Threshold || dataLength < 0 || dataLength > long.MaxValue - Share.HeaderSize)
+            if (carriers.Count < Threshold || HasRepeatedReferences(carriers) || dataLength < 0 || dataLength > long.MaxValue - Share.HeaderSize)
                 return false;
 
             foreach (var carrier in carriers)
@@ -87,13 +100,31 @@ namespace SteganoLib.Sharing
         {
             Validate(carriers);
 
-            if (carriers.Count < Threshold)
+            if (carriers.Count < Threshold || HasRepeatedReferences(carriers))
                 return 0;
 
             long capacity = long.MaxValue;
             foreach (var carrier in carriers)
-                capacity = Math.Min(capacity, Inner.Capacity(carrier));
+            {
+                long available = Inner.Capacity(carrier);
+                if (available < 0)
+                    throw new InvalidOperationException("The inner algorithm returned a negative capacity.");
+                capacity = Math.Min(capacity, available);
+            }
             return Math.Max(0, capacity - Share.HeaderSize);
+        }
+
+        private static bool HasRepeatedReferences(IReadOnlyList<TCarrier> carriers)
+        {
+            // Equal values need not be the same target. Reference identity catches aliasing
+            // for reference carriers without rejecting separate objects with value equality.
+            if (typeof(TCarrier).IsValueType)
+                return false;
+            var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+            foreach (var carrier in carriers)
+                if (carrier is not null && !seen.Add(carrier))
+                    return true;
+            return false;
         }
 
         private static void Validate(IReadOnlyList<TCarrier> carriers)
