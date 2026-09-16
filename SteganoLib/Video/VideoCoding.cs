@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Buffers.Binary;
 using System.IO;
@@ -13,7 +15,8 @@ namespace SteganoLib.Video
     /// are proportional to frame capacity so every frame carries the same low rate;
     /// with <see cref="Spread"/> off, frames are filled one after another and the rest
     /// stay untouched. Extraction reads frames in order until the announced length is
-    /// reached.
+    /// reached. Each operation captures Spread before callbacks. Keep the frame sequence
+    /// and the shared frame algorithm's configuration stable during operations.
     /// </summary>
     /// <typeparam name="TFrame">Frame type the wrapped algorithm works on.</typeparam>
     public sealed class VideoCoding<TFrame> : IStegAlgorithm<IFrameSequence<TFrame>>
@@ -30,20 +33,28 @@ namespace SteganoLib.Video
         /// <summary>Distribute the payload over all frames in proportion to their capacity instead of filling frames in order.</summary>
         public bool Spread { get; set; } = true;
 
+        /// <summary>
+        /// Check frame capacities and piece feasibility before modifying frames in order.
+        /// If embedding fails, earlier frames may already be changed, the failing frame
+        /// follows the sequence and algorithm's failure contracts, and later frames remain untouched.
+        /// </summary>
         public void EmbedBytes(byte[] data, IFrameSequence<TFrame> frames)
         {
             if (data == null) throw new ArgumentNullException(nameof(data));
             if (frames == null) throw new ArgumentNullException(nameof(frames));
 
+            bool spread = Spread;
+            if (data.Length > Array.MaxLength - HeaderSize)
+                throw new ArgumentException("Payload and video header exceed the maximum byte array length.", nameof(data));
             long[] capacities = Capacities(frames);
-            long total = Sum(capacities);
+            UInt128 total = Sum(capacities);
             long payloadLength = (long)HeaderSize + data.Length;
-            if (payloadLength > total)
-                throw new CapacityExceededException(data.Length, Math.Max(0, total - HeaderSize));
+            if ((UInt128)payloadLength > total)
+                throw new CapacityExceededException(data.Length, PayloadCapacity(total));
 
-            long[] pieces = Spread ? Proportional(capacities, total, payloadLength) : Sequential(capacities, payloadLength);
+            long[] pieces = spread ? Proportional(capacities, total, payloadLength) : Sequential(capacities, payloadLength);
             if (!CanEmbedPieces(frames, pieces))
-                throw new CapacityExceededException(data.Length, Math.Max(0, total - HeaderSize));
+                throw new CapacityExceededException(data.Length, PayloadCapacity(total));
 
             var payload = new byte[payloadLength];
             BinaryPrimitives.WriteUInt32BigEndian(payload, (uint)data.Length);
@@ -64,17 +75,19 @@ namespace SteganoLib.Video
         {
             if (frames == null) throw new ArgumentNullException(nameof(frames));
 
+            int count = FrameCount(frames);
             using var buffer = new MemoryStream();
             long total = -1;
-            for (int i = 0; i < frames.Count; i++)
+            for (int i = 0; i < count; i++)
             {
-                var piece = frames.Read(i, frame => FrameAlgorithm.ExtractBytes(frame));
+                var piece = frames.Read(i, frame => FrameAlgorithm.ExtractBytes(frame))
+                    ?? throw new InvalidOperationException("The frame algorithm returned null instead of a payload byte array.");
                 buffer.Write(piece, 0, piece.Length);
 
                 if (total < 0 && buffer.Length >= HeaderSize)
                 {
                     uint length = BinaryPrimitives.ReadUInt32BigEndian(buffer.GetBuffer());
-                    if (length > int.MaxValue - HeaderSize)
+                    if (length > Array.MaxLength - HeaderSize)
                         return Array.Empty<byte>();
                     total = HeaderSize + length;
                 }
@@ -96,13 +109,14 @@ namespace SteganoLib.Video
             if (dataLength < 0 || dataLength > long.MaxValue - HeaderSize)
                 return false;
 
+            bool spread = Spread;
             var capacities = Capacities(frames);
-            long total = Sum(capacities);
+            UInt128 total = Sum(capacities);
             long payloadLength = dataLength + HeaderSize;
-            if (payloadLength > total)
+            if ((UInt128)payloadLength > total)
                 return false;
 
-            var pieces = Spread ? Proportional(capacities, total, payloadLength) : Sequential(capacities, payloadLength);
+            var pieces = spread ? Proportional(capacities, total, payloadLength) : Sequential(capacities, payloadLength);
             return CanEmbedPieces(frames, pieces);
         }
 
@@ -129,32 +143,52 @@ namespace SteganoLib.Video
         {
             if (frames == null) throw new ArgumentNullException(nameof(frames));
 
-            return Math.Max(0, Sum(Capacities(frames)) - HeaderSize);
+            return PayloadCapacity(Sum(Capacities(frames)));
         }
 
         private long[] Capacities(IFrameSequence<TFrame> frames)
         {
-            var capacities = new long[frames.Count];
+            var capacities = new long[FrameCount(frames)];
             for (int i = 0; i < capacities.Length; i++)
-                capacities[i] = Math.Max(0, frames.Read(i, frame => FrameAlgorithm.Capacity(frame)));
+            {
+                capacities[i] = frames.Read(i, frame => FrameAlgorithm.Capacity(frame));
+                if (capacities[i] < 0)
+                    throw new InvalidOperationException("The frame algorithm returned a negative capacity.");
+            }
             return capacities;
         }
 
-        private static long Sum(long[] values)
+        private static int FrameCount(IFrameSequence<TFrame> frames)
         {
-            long sum = 0;
+            int count = frames.Count;
+            if (count < 0)
+                throw new InvalidOperationException("The sequence returned a negative frame count.");
+            return count;
+        }
+
+        private static long PayloadCapacity(UInt128 total)
+        {
+            if (total <= HeaderSize) return 0;
+            UInt128 capacity = total - HeaderSize;
+            return capacity > (UInt128)long.MaxValue ? long.MaxValue : (long)capacity;
+        }
+
+        private static UInt128 Sum(long[] values)
+        {
+            // At most int.MaxValue frames, each with a nonnegative long capacity.
+            UInt128 sum = 0;
             foreach (long v in values)
-                sum += v;
+                sum += (UInt128)v;
             return sum;
         }
 
-        private static long[] Proportional(long[] capacities, long total, long payloadLength)
+        private static long[] Proportional(long[] capacities, UInt128 total, long payloadLength)
         {
             var pieces = new long[capacities.Length];
             long assigned = 0;
             for (int i = 0; i < pieces.Length; i++)
             {
-                pieces[i] = (long)((decimal)capacities[i] * payloadLength / total);
+                pieces[i] = (long)((UInt128)capacities[i] * (UInt128)payloadLength / total);
                 assigned += pieces[i];
             }
 

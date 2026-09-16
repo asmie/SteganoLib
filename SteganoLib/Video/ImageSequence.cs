@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -17,13 +19,13 @@ namespace SteganoLib.Video
     /// </summary>
     public sealed class ImageSequence : IFrameSequence<Image<Rgba32>>
     {
-        private readonly List<string> _paths;
+        private readonly IReadOnlyList<string> _paths;
 
         public ImageSequence(IEnumerable<string> paths)
         {
             if (paths == null) throw new ArgumentNullException(nameof(paths));
 
-            _paths = paths.ToList();
+            _paths = paths.ToList().AsReadOnly();
             foreach (var path in _paths)
             {
                 if (path == null)

@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 
 using SixLabors.ImageSharp;
@@ -16,6 +18,7 @@ namespace SteganoLib.Video
         public static void EmbedBytes(this IStegAlgorithm<IFrameSequence<Image<Rgba32>>> algorithm, byte[] data, string inputPath, string outputPath)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
+            ArgumentNullException.ThrowIfNull(data);
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
@@ -28,6 +31,7 @@ namespace SteganoLib.Video
         public static void EmbedBytes(this IStegAlgorithm<IFrameSequence<JpegImage>> algorithm, byte[] data, string inputPath, string outputPath)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
+            ArgumentNullException.ThrowIfNull(data);
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
@@ -56,6 +60,8 @@ namespace SteganoLib.Video
         public static void Embed(this StegoPipeline<IFrameSequence<Image<Rgba32>>> pipeline, byte[] data, string inputPath, string outputPath, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(data);
+            ArgumentNullException.ThrowIfNull(key);
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
@@ -68,6 +74,8 @@ namespace SteganoLib.Video
         public static void Embed(this StegoPipeline<IFrameSequence<JpegImage>> pipeline, byte[] data, string inputPath, string outputPath, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(data);
+            ArgumentNullException.ThrowIfNull(key);
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
@@ -79,6 +87,7 @@ namespace SteganoLib.Video
         public static ExtractResult Extract(this StegoPipeline<IFrameSequence<Image<Rgba32>>> pipeline, string path, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(key);
             if (path == null) throw new ArgumentNullException(nameof(path));
 
             return pipeline.Extract(AviVideo.Load(path).RgbFrames, key);
@@ -87,6 +96,7 @@ namespace SteganoLib.Video
         public static ExtractResult Extract(this StegoPipeline<IFrameSequence<JpegImage>> pipeline, string path, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(key);
             if (path == null) throw new ArgumentNullException(nameof(path));
 
             return pipeline.Extract(AviVideo.Load(path).JpegFrames, key);
