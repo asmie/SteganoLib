@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.IO;
 
@@ -14,6 +16,7 @@ namespace SteganoLib.Audio
         public static void EmbedBytes(this IStegAlgorithm<PcmAudio> algorithm, byte[] data, string inputPath, string outputPath)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
+            ArgumentNullException.ThrowIfNull(data);
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
@@ -26,6 +29,7 @@ namespace SteganoLib.Audio
         public static void EmbedBytes(this IStegAlgorithm<PcmAudio> algorithm, byte[] data, Stream input, Stream output)
         {
             if (algorithm == null) throw new ArgumentNullException(nameof(algorithm));
+            ArgumentNullException.ThrowIfNull(data);
             if (input == null) throw new ArgumentNullException(nameof(input));
             if (output == null) throw new ArgumentNullException(nameof(output));
 
@@ -54,6 +58,8 @@ namespace SteganoLib.Audio
         public static void Embed(this StegoPipeline<PcmAudio> pipeline, byte[] data, string inputPath, string outputPath, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(data);
+            ArgumentNullException.ThrowIfNull(key);
             if (inputPath == null) throw new ArgumentNullException(nameof(inputPath));
             if (outputPath == null) throw new ArgumentNullException(nameof(outputPath));
 
@@ -66,6 +72,8 @@ namespace SteganoLib.Audio
         public static void Embed(this StegoPipeline<PcmAudio> pipeline, byte[] data, Stream input, Stream output, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(data);
+            ArgumentNullException.ThrowIfNull(key);
             if (input == null) throw new ArgumentNullException(nameof(input));
             if (output == null) throw new ArgumentNullException(nameof(output));
 
@@ -77,6 +85,7 @@ namespace SteganoLib.Audio
         public static ExtractResult Extract(this StegoPipeline<PcmAudio> pipeline, string path, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(key);
             if (path == null) throw new ArgumentNullException(nameof(path));
 
             return pipeline.Extract(PcmAudio.Load(path), key);
@@ -85,6 +94,7 @@ namespace SteganoLib.Audio
         public static ExtractResult Extract(this StegoPipeline<PcmAudio> pipeline, Stream input, StegoKey key)
         {
             if (pipeline == null) throw new ArgumentNullException(nameof(pipeline));
+            ArgumentNullException.ThrowIfNull(key);
             if (input == null) throw new ArgumentNullException(nameof(input));
 
             return pipeline.Extract(PcmAudio.Load(input), key);

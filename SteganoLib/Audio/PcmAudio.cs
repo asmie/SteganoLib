@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
@@ -64,7 +66,15 @@ namespace SteganoLib.Audio
         /// <summary>Read-only collection of chunks written before data. Chunk payload arrays remain editable.</summary>
         public IReadOnlyList<RiffChunk> ExtraChunks { get; }
 
-        public int Sample(int frame, int channel) => Samples[frame * Channels + channel];
+        /// <summary>Read a sample at a valid frame and channel coordinate.</summary>
+        public int Sample(int frame, int channel)
+        {
+            if ((uint)frame >= (uint)FrameCount)
+                throw new ArgumentOutOfRangeException(nameof(frame));
+            if ((uint)channel >= (uint)Channels)
+                throw new ArgumentOutOfRangeException(nameof(channel));
+            return Samples[frame * Channels + channel];
+        }
 
         /// <exception cref="NotSupportedException">Float, compressed or unsupported sample precision.</exception>
         /// <exception cref="InvalidDataException">Invalid RIFF framing, PCM format fields or incomplete sample frames.</exception>
@@ -101,6 +111,8 @@ namespace SteganoLib.Audio
             stream.Write(bytes, 0, bytes.Length);
         }
 
+        /// <summary>Serialise the current samples and metadata as WAV. Keep mutable buffers stable during serialisation.</summary>
+        /// <exception cref="InvalidOperationException">The format does not fit WAV fields, samples exceed their bit depth, or the output exceeds the maximum byte array length.</exception>
         public byte[] ToArray() => WaveWriter.Write(this);
 
         /// <summary>Copies samples and metadata payloads so edits to the clone do not affect this audio.</summary>
@@ -122,7 +134,7 @@ namespace SteganoLib.Audio
                 int end = RiffReader.ContainerEnd(data, "WAVE");
                 int channels = 0, sampleRate = 0, bits = 0;
                 bool formatSeen = false;
-                byte[] pcm = null;
+                byte[]? pcm = null;
                 var extra = new List<RiffChunk>();
 
                 foreach (var (id, pos, size) in RiffReader.Chunks(data, 12, end))
@@ -208,7 +220,19 @@ namespace SteganoLib.Audio
             public static byte[] Write(PcmAudio audio)
             {
                 int bytesPerSample = audio.BitsPerSample / 8;
-                int dataSize = audio.Samples.Length * bytesPerSample;
+                long alignment = (long)audio.Channels * bytesPerSample;
+                if (alignment > ushort.MaxValue)
+                    throw new InvalidOperationException("PCM block alignment exceeds its WAV field.");
+                long byteRate = audio.SampleRate * alignment;
+                if (byteRate > uint.MaxValue)
+                    throw new InvalidOperationException("PCM byte rate exceeds its WAV field.");
+
+                long dataSize = (long)audio.Samples.Length * bytesPerSample;
+                long fileSize = 44 + dataSize + (dataSize & 1);
+                foreach (var chunk in audio.ExtraChunks)
+                    fileSize += 8L + chunk.Payload.Length + (chunk.Payload.Length & 1);
+                if (fileSize > Array.MaxLength)
+                    throw new InvalidOperationException("Serialised WAV exceeds the maximum byte array length.");
 
                 using var stream = new MemoryStream();
                 using var writer = new BinaryWriter(stream);
@@ -222,8 +246,8 @@ namespace SteganoLib.Audio
                 writer.Write((ushort)1);
                 writer.Write((ushort)audio.Channels);
                 writer.Write(audio.SampleRate);
-                writer.Write(audio.SampleRate * audio.Channels * bytesPerSample);
-                writer.Write((ushort)(audio.Channels * bytesPerSample));
+                writer.Write((uint)byteRate);
+                writer.Write((ushort)alignment);
                 writer.Write((ushort)audio.BitsPerSample);
 
                 foreach (var chunk in audio.ExtraChunks)
@@ -236,9 +260,11 @@ namespace SteganoLib.Audio
                 }
 
                 writer.Write(Encoding.ASCII.GetBytes("data"));
-                writer.Write(dataSize);
+                writer.Write((int)dataSize);
                 foreach (int sample in audio.Samples)
                 {
+                    if (sample < audio.MinValue || sample > audio.MaxValue)
+                        throw new InvalidOperationException($"Sample value {sample} is outside the signed {audio.BitsPerSample}-bit PCM range.");
                     switch (audio.BitsPerSample)
                     {
                         case 8: writer.Write((byte)(sample + 128)); break;
