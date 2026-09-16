@@ -119,6 +119,8 @@ Image LSB and audio LSB capture channel/bit settings, embedding mode where appli
 
 Configure algorithms before use and synchronise concurrent configuration changes externally. Selectors and cost models remain shared objects: their own configuration and the carrier data must stay stable during an operation. Pixel and sample indices are checked when visited, so invalid coordinates raise `InvalidOperationException` before accessing that position. Selectors must still provide finite, repeatable sequences with valid counts and no duplicates. Invalid image LSB embedding-mode values are rejected at assignment.
 
+Audio LSB stages changed sample values and applies them only after embedding and selector disposal succeed. Selector, cost-model or capacity failures leave the sample array unchanged, and successful embedding updates that same array in place. Callbacks see the original samples until changes are applied. Temporary storage grows with the number of changed samples; it does not copy the entire recording. This guarantee requires callbacks and other threads to leave the carrier untouched during embedding.
+
 ## Benchmarks
 
 `SteganoLib.Benchmarks` holds BenchmarkDotNet benchmarks for the LSB, JPEG, coding, envelope and steganalysis paths. They are not part of the test run; execute them with

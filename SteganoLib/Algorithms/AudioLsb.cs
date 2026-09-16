@@ -37,7 +37,11 @@ namespace SteganoLib.Algorithms
             _selector = selector ?? throw new ArgumentNullException(nameof(selector));
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Embeds into the existing sample array. Changes are staged until embedding and
+        /// selector cleanup succeed; an exception leaves samples unchanged. Callbacks and
+        /// other threads must not modify the carrier during the operation.
+        /// </summary>
         public void EmbedBytes(byte[] data, PcmAudio audio)
         {
             if (data == null)
@@ -47,6 +51,7 @@ namespace SteganoLib.Algorithms
 
             var carrier = new Carrier(this, audio);
             SlotEmbedding.Embed(carrier, data, carrier.Configuration.Coder, carrier.Configuration.MaxWidth);
+            carrier.Commit();
         }
 
         /// <inheritdoc />
@@ -118,6 +123,7 @@ namespace SteganoLib.Algorithms
         {
             private readonly AudioLsb _owner;
             private readonly PcmAudio _audio;
+            private Dictionary<long, int>? _changes;
 
             public Carrier(AudioLsb owner, PcmAudio audio)
             {
@@ -142,11 +148,14 @@ namespace SteganoLib.Algorithms
                 }
             }
 
-            public override bool Read((long Index, int Bit) slot) => ((_audio.Samples[slot.Index] >> slot.Bit) & 1) == 1;
+            private int Sample(long index) => _changes != null && _changes.TryGetValue(index, out int value)
+                ? value : _audio.Samples[index];
+
+            public override bool Read((long Index, int Bit) slot) => ((Sample(slot.Index) >> slot.Bit) & 1) == 1;
 
             public override void Write((long Index, int Bit) slot, bool bit, bool up)
             {
-                int value = _audio.Samples[slot.Index];
+                int value = Sample(slot.Index);
                 if (((value >> slot.Bit) & 1) == (bit ? 1 : 0))
                     return;
 
@@ -164,7 +173,17 @@ namespace SteganoLib.Algorithms
                     value ^= 1 << slot.Bit;
                 }
 
-                _audio.Samples[slot.Index] = value;
+                // Keep earlier bit changes to the same sample without touching the cover.
+                // Allocation or selector failures therefore leave the caller's array intact.
+                (_changes ??= new Dictionary<long, int>())[slot.Index] = value;
+            }
+
+            public void Commit()
+            {
+                if (_changes == null)
+                    return;
+                foreach (var change in _changes)
+                    _audio.Samples[change.Key] = change.Value;
             }
 
             public override double Cost((long Index, int Bit) slot) => Configuration.CostModel.Cost(_audio, slot.Index);
