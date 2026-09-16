@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
@@ -16,7 +18,7 @@ namespace SteganoLib.Video
         /// <summary>Uncompressed 24- or 32-bit BGR frames (<c>BI_RGB</c>).</summary>
         Rgb,
 
-        /// <summary>Motion JPEG: every frame is a standalone baseline JPEG.</summary>
+        /// <summary>Motion JPEG: standalone JPEG frames. Coefficient decoding supports baseline and extended-sequential JPEG.</summary>
         Mjpeg,
     }
 
@@ -26,6 +28,8 @@ namespace SteganoLib.Video
     /// RGB or <see cref="JpegImage"/> for MJPEG, so the image algorithms apply per frame.
     /// Audio streams, extra headers and chunk order are preserved; the index is rebuilt.
     /// OpenDML files with more than one RIFF chunk are not supported.
+    /// Public raw-frame APIs copy buffers. Keep the video and input images stable during operations;
+    /// concurrent reads and writes require external synchronisation.
     /// </summary>
     public sealed class AviVideo
     {
@@ -37,7 +41,7 @@ namespace SteganoLib.Video
 
         private static readonly Encoding Ascii = Encoding.ASCII;
 
-        private byte[] _avih;
+        private byte[]? _avih;
         private int _videoStream;
         private readonly List<List<(string Id, byte[] Data)>> _streams;
         private readonly List<byte[]> _headerExtras;
@@ -100,7 +104,7 @@ namespace SteganoLib.Video
             bool hdrlSeen = false, moviSeen = false;
             foreach (var (id, offset, size) in Chunks(data, 12, riffEnd))
             {
-                string listType = id == "LIST" && size >= 4 ? Tag(data, offset) : null;
+                string? listType = id == "LIST" && size >= 4 ? Tag(data, offset) : null;
                 if (listType == "hdrl")
                 {
                     if (hdrlSeen || moviSeen)
@@ -128,8 +132,10 @@ namespace SteganoLib.Video
             if (_videoStream < 0)
                 throw new NotSupportedException("AVI file has no video stream.");
 
-            var strf = FindChunk(_streams[_videoStream], "strf");
-            var strh = FindChunk(_streams[_videoStream], "strh");
+            var strf = FindChunk(_streams[_videoStream], "strf")
+                ?? throw new InvalidDataException("AVI video stream has no bitmap header.");
+            var strh = FindChunk(_streams[_videoStream], "strh")
+                ?? throw new InvalidDataException("AVI video stream has no stream header.");
             Width = BinaryPrimitives.ReadInt32LittleEndian(strf.AsSpan(4));
             int rawHeight = BinaryPrimitives.ReadInt32LittleEndian(strf.AsSpan(8));
             if (rawHeight == int.MinValue)
@@ -262,18 +268,25 @@ namespace SteganoLib.Video
 
         // ---------- raw frames ----------
 
-        /// <summary>Raw chunk bytes of frame <paramref name="index"/>: a DIB for RGB, a JPEG file for MJPEG.</summary>
-        public byte[] GetFrameData(int index) => _movi[FrameChunk(index)].Data;
+        /// <summary>An independent copy of frame <paramref name="index"/>: a DIB for RGB, a JPEG file for MJPEG. Use SetFrameData to apply edits.</summary>
+        public byte[] GetFrameData(int index) => (byte[])_movi[FrameChunk(index)].Data.Clone();
 
+        /// <summary>Replace a frame with a copy of the supplied bytes after checking RGB size or the JPEG signature. JPEG contents and dimensions are validated when decoded.</summary>
         public void SetFrameData(int index, byte[] data)
         {
             int chunk = FrameChunk(index);
-            _movi[chunk] = (_movi[chunk].Id, ValidateFrame(data));
+            _movi[chunk] = (_movi[chunk].Id, (byte[])ValidateFrame(data).Clone());
         }
 
+        /// <summary>Append a copy of the supplied bytes after checking RGB size or the JPEG signature. JPEG contents and dimensions are validated when decoded.</summary>
         public void AddFrame(byte[] data)
         {
-            var frame = ValidateFrame(data);
+            AddOwnedFrame((byte[])ValidateFrame(data).Clone());
+        }
+
+        // Fresh encoded buffers and validated copies have no external owner.
+        private void AddOwnedFrame(byte[] frame)
+        {
             _frames.Add(_movi.Count);
             _movi.Add(($"{_videoStream:D2}{(Codec == AviCodec.Rgb ? "db" : "dc")}", frame));
         }
@@ -284,7 +297,7 @@ namespace SteganoLib.Video
         public Image<Rgba32> DecodeFrame(int index)
         {
             RequireCodec(AviCodec.Rgb);
-            var data = GetFrameData(index);
+            var data = _movi[FrameChunk(index)].Data;
             int bytesPerPixel = BitCount / 8;
             int stride = Stride;
             var image = new Image<Rgba32>(Width, Height);
@@ -303,12 +316,14 @@ namespace SteganoLib.Video
 
         public void EncodeFrame(int index, Image<Rgba32> image)
         {
-            SetFrameData(index, EncodeRgb(image));
+            RequireCodec(AviCodec.Rgb);
+            int chunk = FrameChunk(index);
+            _movi[chunk] = (_movi[chunk].Id, EncodeRgb(image));
         }
 
         public void AddFrame(Image<Rgba32> image)
         {
-            AddFrame(EncodeRgb(image));
+            AddOwnedFrame(EncodeRgb(image));
         }
 
         // ---------- MJPEG frames ----------
@@ -316,7 +331,7 @@ namespace SteganoLib.Video
         public JpegImage DecodeJpegFrame(int index)
         {
             RequireCodec(AviCodec.Mjpeg);
-            var image = JpegImage.Load(GetFrameData(index));
+            var image = JpegImage.Load(_movi[FrameChunk(index)].Data);
             if (image.Width != Width || image.Height != Height)
                 throw new InvalidDataException("MJPEG frame dimensions do not match the AVI stream.");
             return image;
@@ -324,14 +339,14 @@ namespace SteganoLib.Video
 
         public void EncodeJpegFrame(int index, JpegImage image)
         {
-            if (image == null) throw new ArgumentNullException(nameof(image));
-            SetFrameData(index, image.ToArray());
+            RequireCodec(AviCodec.Mjpeg);
+            int chunk = FrameChunk(index);
+            _movi[chunk] = (_movi[chunk].Id, EncodeJpeg(image));
         }
 
         public void AddFrame(JpegImage image)
         {
-            if (image == null) throw new ArgumentNullException(nameof(image));
-            AddFrame(image.ToArray());
+            AddOwnedFrame(EncodeJpeg(image));
         }
 
         // ---------- output ----------
@@ -480,9 +495,9 @@ namespace SteganoLib.Video
             return data.AsSpan(chunkStart, length).ToArray();
         }
 
-        private static byte[] FindChunk(List<(string Id, byte[] Data)> chunks, string id)
+        private static byte[]? FindChunk(List<(string Id, byte[] Data)> chunks, string id)
         {
-            byte[] found = null;
+            byte[]? found = null;
             foreach (var (chunkId, data) in chunks)
             {
                 if (chunkId == id)
@@ -501,7 +516,7 @@ namespace SteganoLib.Video
 
         private byte[] PatchedMainHeader(int maxFrame)
         {
-            var avih = (byte[])_avih.Clone();
+            var avih = (byte[])(_avih ?? throw new InvalidOperationException("AVI main header is missing.")).Clone();
             var span = avih.AsSpan();
             BinaryPrimitives.WriteUInt32LittleEndian(span, (uint)Math.Round(1_000_000.0 / FrameRate));
             BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4), (uint)Math.Min(uint.MaxValue, Math.Ceiling(maxFrame * FrameRate)));
@@ -604,6 +619,16 @@ namespace SteganoLib.Video
         private static bool IsJpegSignature(byte[] data)
         {
             return data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
+        }
+
+        private byte[] EncodeJpeg(JpegImage image)
+        {
+            RequireCodec(AviCodec.Mjpeg);
+            if (image == null)
+                throw new ArgumentNullException(nameof(image));
+            if (image.Width != Width || image.Height != Height)
+                throw new ArgumentException($"Frame must be {Width}x{Height}, got {image.Width}x{image.Height}.", nameof(image));
+            return image.ToArray();
         }
 
         private byte[] EncodeRgb(Image<Rgba32> image)
